@@ -1,13 +1,24 @@
 import { create } from 'zustand';
 import { supabase } from '../lib/supabase';
 
+// AI state for tracking AI behavior
+interface AIState {
+  targetX: number;
+  targetY: number;
+  lastShotTime: number;
+  movementDirection: { x: number, y: number };
+  changeDirCounter: number;
+}
+
 interface Player {
   id: string;
   x: number;
   y: number;
   health: number;
   username: string;
-  avatar_url?: string;  // Added avatar_url for player icons
+  avatar_url?: string;
+  isAI?: boolean;
+  aiState?: AIState;
 }
 
 interface GameState {

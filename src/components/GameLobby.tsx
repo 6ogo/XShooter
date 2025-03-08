@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useGameStore } from '../store/gameStore';
-import { Users, Swords, Trophy, Award } from 'lucide-react';
+import { Users, Swords, Trophy, Award, User } from 'lucide-react';
 
 export function GameLobby() {
   const navigate = useNavigate();
@@ -110,6 +110,11 @@ export function GameLobby() {
     }
   };
 
+  const startSingleplayer = () => {
+    // No need to create a game in the database for singleplayer
+    navigate('/game/singleplayer');
+  };
+
   const joinGame = async (gameId: string) => {
     setGameId(gameId);
     navigate(`/game/${gameId}`);
@@ -155,13 +160,6 @@ export function GameLobby() {
               <Trophy size={20} />
               Leaderboard
             </button>
-            <button
-              onClick={createGame}
-              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
-            >
-              <Swords size={20} />
-              Create Game
-            </button>
           </div>
         </div>
 
@@ -170,9 +168,51 @@ export function GameLobby() {
             {error}
           </div>
         )}
+        
+        {/* Game modes */}
+        <div className="grid md:grid-cols-2 gap-6 mb-8">
+          <div className="bg-gradient-to-r from-green-900 to-green-800 rounded-lg shadow-xl p-6 text-white">
+            <div className="flex items-center gap-4 mb-4">
+              <div className="p-3 rounded-full bg-green-700">
+                <User size={24} />
+              </div>
+              <h2 className="text-xl font-semibold">Singleplayer Mode</h2>
+            </div>
+            <p className="mb-6 text-green-200">
+              Practice your skills against AI opponents. Test your abilities before competing against other players.
+            </p>
+            <button
+              onClick={startSingleplayer}
+              className="w-full flex justify-center items-center gap-2 py-2 px-4 bg-green-600 text-white rounded-md hover:bg-green-700"
+            >
+              <Swords size={20} />
+              Play Singleplayer
+            </button>
+          </div>
+          
+          <div className="bg-gradient-to-r from-indigo-900 to-indigo-800 rounded-lg shadow-xl p-6 text-white">
+            <div className="flex items-center gap-4 mb-4">
+              <div className="p-3 rounded-full bg-indigo-700">
+                <Users size={24} />
+              </div>
+              <h2 className="text-xl font-semibold">Multiplayer Mode</h2>
+            </div>
+            <p className="mb-6 text-indigo-200">
+              Compete against other players online. Your stats will be tracked on the leaderboard.
+            </p>
+            <button
+              onClick={createGame}
+              className="w-full flex justify-center items-center gap-2 py-2 px-4 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+            >
+              <Swords size={20} />
+              Create Multiplayer Game
+            </button>
+          </div>
+        </div>
 
+        {/* Active multiplayer games */}
         <div className="bg-white rounded-lg shadow-xl p-6">
-          <h2 className="text-xl font-semibold mb-4">Active Games</h2>
+          <h2 className="text-xl font-semibold mb-4">Active Multiplayer Games</h2>
           {loading ? (
             <p className="text-gray-600">Loading games...</p>
           ) : activeGames.length === 0 ? (

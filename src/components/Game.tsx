@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase';
 import { AchievementNotification } from './AchievementNotification';
 import { Avatar } from './Avatar';
 import { achievementService, GameCompletionData } from '../lib/achievementService';
+import { MobileControls } from './MobileControls';
 
 const CANVAS_WIDTH = 800;
 const CANVAS_HEIGHT = 600;
@@ -12,6 +13,9 @@ const PLAYER_SIZE = 20; // Base player size for hitbox
 const PROJECTILE_SIZE = 5;
 const SHOT_COOLDOWN = 3000;
 const MAX_SHOTS = 5;
+const AI_UPDATE_INTERVAL = 500; // AI decision making interval in ms
+const AI_SIGHT_RANGE = 300; // How far AI can "see" the player
+const AI_SHOT_CHANCE = 0.7; // Probability of AI shooting when player is in sight
 
 interface Projectile {
   x: number;
@@ -21,6 +25,16 @@ interface Projectile {
   playerId: string;
 }
 
+// AI state for tracking AI behavior
+interface AIState {
+  targetX: number;
+  targetY: number;
+  lastShotTime: number;
+  movementDirection: { x: number, y: number };
+  changeDirCounter: number;
+}
+
+// Update Player interface to include AI properties
 interface Player {
   id: string;
   x: number;
@@ -28,6 +42,8 @@ interface Player {
   health: number;
   username: string;
   avatar_url?: string;
+  isAI?: boolean;
+  aiState?: AIState;
 }
 
 // Cache player avatars for rendering
@@ -46,6 +62,8 @@ export function Game() {
   const [gameState, setGameState] = useState<'waiting' | 'playing' | 'finished'>('waiting');
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [playerAvatars, setPlayerAvatars] = useState<PlayerAvatarCache>({});
+  const [isMobile, setIsMobile] = useState(false);
+  const [isSingleplayer, setIsSingleplayer] = useState(false);
   const [gameStats, setGameStats] = useState({
     killCount: 0,
     shotsFired: 0,
@@ -67,6 +85,23 @@ export function Game() {
   // For tracking time with low health
   const lowHealthTimeRef = useRef(0);
   const lastTimeRef = useRef(0);
+  const aiUpdateTimeRef = useRef(0);
+
+  // Detect if using mobile device
+  useEffect(() => {
+    const checkMobile = () => {
+      const userAgent = navigator.userAgent || navigator.vendor;
+      const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
+      setIsMobile(isMobileDevice);
+    };
+    
+    checkMobile();
+    
+    // Check if this is a singleplayer game by examining the URL params
+    if (id === 'singleplayer') {
+      setIsSingleplayer(true);
+    }
+  }, [id]);
 
   // Helper function to create fallback avatar
   const createFallbackAvatar = (username: string, size: number) => {
@@ -117,12 +152,12 @@ export function Game() {
         img.crossOrigin = 'anonymous'; // Handle CORS
         
         // Create a promise to wait for image loading
-        await new Promise((resolve, reject) => {
-          img.onload = resolve;
+        await new Promise<void>((resolve) => {
+          img.onload = () => resolve();
           img.onerror = () => {
             // On error, use fallback
             playerAvatars[player.id] = createFallbackAvatar(player.username, PLAYER_SIZE);
-            resolve(null);
+            resolve();
           };
           img.src = player.avatar_url || '';
         });
@@ -141,9 +176,37 @@ export function Game() {
     return fallbackAvatar;
   };
 
+  // Initialize the game
   useEffect(() => {
     // Check if user is authenticated
     const checkAuth = async () => {
+      // For singleplayer mode, we can skip authentication
+      if (isSingleplayer) {
+        const playerId = 'player_' + Math.random().toString(36).substring(2, 9);
+        setCurrentUserId(playerId);
+        
+        // Initialize player with random position
+        const x = Math.random() * (CANVAS_WIDTH - PLAYER_SIZE * 2) + PLAYER_SIZE;
+        const y = Math.random() * (CANVAS_HEIGHT - PLAYER_SIZE * 2) + PLAYER_SIZE;
+        
+        updatePlayer(playerId, {
+          id: playerId,
+          x,
+          y,
+          health: 100,
+          username: 'You'
+        });
+        
+        // Initialize AI opponents
+        initializeAIOpponents(3); // Create 3 AI opponents
+        
+        // Set game state to playing
+        setGameState('playing');
+        
+        return;
+      }
+      
+      // For multiplayer, use authentication
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         navigate('/');
@@ -176,46 +239,90 @@ export function Game() {
         });
         
         // Add player to game_players table
-        await supabase
-          .from('game_players')
-          .insert({
-            game_id: id,
-            player_id: user.id,
-            position_x: x,
-            position_y: y
-          });
-          
-        // Update game current_players count
-        await supabase
-          .from('games')
-          .update({ current_players: players.size + 1 })
-          .eq('id', id);
+        if (id) {
+          await supabase
+            .from('game_players')
+            .insert({
+              game_id: id,
+              player_id: user.id,
+              position_x: x,
+              position_y: y
+            });
+            
+          // Update game current_players count
+          await supabase
+            .from('games')
+            .update({ current_players: players.size + 1 })
+            .eq('id', id);
+        }
       }
     };
     
     checkAuth();
     
-    // Set up game subscription
-    const gameSubscription = supabase
-      .channel(`game:${id}`)
-      .on('presence', { event: 'sync' }, () => {
-        // Handle presence sync
-      })
-      .on('presence', { event: 'join' }, ({ newPresences }) => {
-        // Handle player join
-      })
-      .on('presence', { event: 'leave' }, ({ leftPresences }) => {
-        // Handle player leave
-        leftPresences.forEach((presence: any) => {
-          removePlayer(presence.user_id);
-        });
-      })
-      .subscribe();
+    // Set up game subscription for multiplayer mode
+    if (!isSingleplayer && id) {
+      const gameSubscription = supabase
+        .channel(`game:${id}`)
+        .on('presence', { event: 'sync' }, () => {
+          // Handle presence sync
+        })
+        .on('presence', { event: 'join' }, () => {
+          // Handle player join
+        })
+        .on('presence', { event: 'leave' }, ({ leftPresences }) => {
+          // Handle player leave
+          leftPresences.forEach((presence: any) => {
+            removePlayer(presence.user_id);
+          });
+        })
+        .subscribe();
+        
+      return () => {
+        gameSubscription.unsubscribe();
+      };
+    }
+  }, [id, navigate, updatePlayer, removePlayer, players.size, isSingleplayer]);
+
+  // Function to initialize AI opponents for singleplayer mode
+  const initializeAIOpponents = (count: number) => {
+    for (let i = 0; i < count; i++) {
+      const aiId = 'ai_' + Math.random().toString(36).substring(2, 9);
       
-    return () => {
-      gameSubscription.unsubscribe();
-    };
-  }, [id, navigate, updatePlayer, removePlayer, players.size]);
+      // Create random position away from player
+      const x = Math.random() * (CANVAS_WIDTH - PLAYER_SIZE * 2) + PLAYER_SIZE;
+      const y = Math.random() * (CANVAS_HEIGHT - PLAYER_SIZE * 2) + PLAYER_SIZE;
+      
+      // Initialize AI state with random movement direction
+      const movementDirection = {
+        x: Math.random() * 2 - 1, // Random between -1 and 1
+        y: Math.random() * 2 - 1  // Random between -1 and 1
+      };
+      
+      // Normalize movement direction
+      const length = Math.sqrt(movementDirection.x * movementDirection.x + movementDirection.y * movementDirection.y);
+      if (length > 0) {
+        movementDirection.x /= length;
+        movementDirection.y /= length;
+      }
+      
+      updatePlayer(aiId, {
+        id: aiId,
+        x,
+        y,
+        health: 100,
+        username: `Bot ${i + 1}`,
+        isAI: true,
+        aiState: {
+          targetX: x,
+          targetY: y,
+          lastShotTime: 0,
+          movementDirection,
+          changeDirCounter: 0
+        }
+      });
+    }
+  };
 
   // Preload player avatars when player data changes
   useEffect(() => {
@@ -237,6 +344,7 @@ export function Game() {
     loadAvatars();
   }, [players]);
 
+  // Main game loop
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !currentUserId) return;
@@ -255,6 +363,15 @@ export function Game() {
       const currentPlayer = players.get(currentUserId);
       if (currentPlayer && currentPlayer.health <= 20) {
         lowHealthTimeRef.current += deltaTime / 1000; // Convert to seconds
+      }
+      
+      // Update AI behavior
+      if (isSingleplayer) {
+        aiUpdateTimeRef.current += deltaTime;
+        if (aiUpdateTimeRef.current >= AI_UPDATE_INTERVAL) {
+          updateAIBehavior();
+          aiUpdateTimeRef.current = 0;
+        }
       }
       
       ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
@@ -293,7 +410,7 @@ export function Game() {
           ctx.restore();
         } else {
           // Fallback to colored circle
-          ctx.fillStyle = player.id === currentUserId ? '#4CAF50' : '#F44336';
+          ctx.fillStyle = player.id === currentUserId ? '#4CAF50' : (player.isAI ? '#F44336' : '#2196F3');
           ctx.beginPath();
           ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
           ctx.fill();
@@ -456,14 +573,139 @@ export function Game() {
 
     draw(performance.now());
     return () => cancelAnimationFrame(animationId);
-  }, [players, projectiles, currentUserId, gameState, updatePlayer, playerAvatars]);
+  }, [players, projectiles, currentUserId, gameState, updatePlayer, playerAvatars, isSingleplayer]);
+
+  // AI behavior update function
+  const updateAIBehavior = () => {
+    const currentPlayer = players.get(currentUserId || '');
+    if (!currentPlayer || currentPlayer.health <= 0) return;
+    
+    players.forEach((player, playerId) => {
+      if (!player.isAI || player.health <= 0) return;
+      
+      // Get AI state
+      const aiState = player.aiState;
+      if (!aiState) return;
+      
+      // Calculate distance to player
+      const distToPlayer = Math.hypot(
+        currentPlayer.x - player.x,
+        currentPlayer.y - player.y
+      );
+      
+      // Different behavior based on distance to player
+      if (distToPlayer < AI_SIGHT_RANGE) {
+        // Player is in sight - chase and possibly shoot
+        
+        // Update movement direction towards player
+        const dirX = currentPlayer.x - player.x;
+        const dirY = currentPlayer.y - player.y;
+        
+        // Normalize direction
+        const length = Math.sqrt(dirX * dirX + dirY * dirY);
+        const normalizedDirX = length > 0 ? dirX / length : 0;
+        const normalizedDirY = length > 0 ? dirY / length : 0;
+        
+        // Set new movement direction (slightly randomized for more natural movement)
+        const randomFactor = 0.3; // How much randomness to add
+        aiState.movementDirection = {
+          x: normalizedDirX + (Math.random() * 2 - 1) * randomFactor,
+          y: normalizedDirY + (Math.random() * 2 - 1) * randomFactor
+        };
+        
+        // Normalize again after adding randomness
+        const newLength = Math.sqrt(
+          aiState.movementDirection.x * aiState.movementDirection.x + 
+          aiState.movementDirection.y * aiState.movementDirection.y
+        );
+        
+        if (newLength > 0) {
+          aiState.movementDirection.x /= newLength;
+          aiState.movementDirection.y /= newLength;
+        }
+        
+        // Possibly shoot at player
+        const currentTime = performance.now();
+        const timeSinceLastShot = currentTime - aiState.lastShotTime;
+        
+        if (timeSinceLastShot > SHOT_COOLDOWN && Math.random() < AI_SHOT_CHANCE) {
+          // Shoot at player with some random spread
+          const spreadFactor = 0.2; // How much spread to add
+          const spreadX = (Math.random() * 2 - 1) * spreadFactor;
+          const spreadY = (Math.random() * 2 - 1) * spreadFactor;
+          
+          const shootDirX = normalizedDirX + spreadX;
+          const shootDirY = normalizedDirY + spreadY;
+          
+          // Normalize shooting direction
+          const shootLength = Math.sqrt(shootDirX * shootDirX + shootDirY * shootDirY);
+          const velocityX = 5 * (shootLength > 0 ? shootDirX / shootLength : 0);
+          const velocityY = 5 * (shootLength > 0 ? shootDirY / shootLength : 0);
+          
+          // Add projectile
+          setProjectiles(prev => [
+            ...prev,
+            {
+              x: player.x,
+              y: player.y,
+              dx: velocityX,
+              dy: velocityY,
+              playerId: playerId
+            }
+          ]);
+          
+          // Update last shot time
+          aiState.lastShotTime = currentTime;
+        }
+      } else {
+        // Player not in sight - random movement
+        
+        // Occasionally change direction
+        aiState.changeDirCounter++;
+        if (aiState.changeDirCounter >= 5) { // Change direction every ~2.5 seconds
+          aiState.changeDirCounter = 0;
+          
+          const randomAngle = Math.random() * Math.PI * 2;
+          aiState.movementDirection = {
+            x: Math.cos(randomAngle),
+            y: Math.sin(randomAngle)
+          };
+        }
+      }
+      
+      // Move AI based on current direction
+      const moveSpeed = 2; // Slower than player for balance
+      let newX = player.x + aiState.movementDirection.x * moveSpeed;
+      let newY = player.y + aiState.movementDirection.y * moveSpeed;
+      
+      // Keep within bounds
+      newX = Math.max(PLAYER_SIZE, Math.min(CANVAS_WIDTH - PLAYER_SIZE, newX));
+      newY = Math.max(PLAYER_SIZE, Math.min(CANVAS_HEIGHT - PLAYER_SIZE, newY));
+      
+      // Update AI position
+      updatePlayer(playerId, { 
+        x: newX, 
+        y: newY,
+        aiState: {
+          ...aiState,
+          targetX: newX,
+          targetY: newY
+        }
+      });
+    });
+  };
 
   const handleGameEnd = async (isWinner: boolean) => {
     setGameState('finished');
     
     if (!currentUserId) return;
     
-    // Update leaderboard
+    // For singleplayer mode, we don't need to update leaderboard
+    if (isSingleplayer) {
+      return;
+    }
+    
+    // Update leaderboard for multiplayer
     const { data: leaderboardEntry } = await supabase
       .from('leaderboard')
       .select('*')
@@ -484,25 +726,27 @@ export function Game() {
     }
     
     // Update game_players entry
-    await supabase
-      .from('game_players')
-      .update({
-        kills: gameStats.killCount,
-        shots_fired: gameStats.shotsFired,
-        shots_hit: gameStats.shotsHit
-      })
-      .eq('game_id', id)
-      .eq('player_id', currentUserId);
-      
-    // Update game status
-    await supabase
-      .from('games')
-      .update({ status: 'finished' })
-      .eq('id', id);
+    if (id) {
+      await supabase
+        .from('game_players')
+        .update({
+          kills: gameStats.killCount,
+          shots_fired: gameStats.shotsFired,
+          shots_hit: gameStats.shotsHit
+        })
+        .eq('game_id', id)
+        .eq('player_id', currentUserId);
+        
+      // Update game status
+      await supabase
+        .from('games')
+        .update({ status: 'finished' })
+        .eq('id', id);
+    }
       
     // Check for achievements
     const gameData: GameCompletionData = {
-      gameId: id || '',
+      gameId: id || 'singleplayer',
       playerId: currentUserId,
       winner: isWinner,
       killCount: gameStats.killCount,
@@ -549,10 +793,16 @@ export function Game() {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
+    fireProjectile(x, y);
+  };
+
+  const fireProjectile = (targetX: number, targetY: number) => {
+    if (!canShoot || shotCount >= MAX_SHOTS || !currentUserId) return;
+
     const currentPlayer = players.get(currentUserId);
     if (!currentPlayer || currentPlayer.health <= 0) return;
 
-    const angle = Math.atan2(y - currentPlayer.y, x - currentPlayer.x);
+    const angle = Math.atan2(targetY - currentPlayer.y, targetX - currentPlayer.x);
     const velocity = 5;
     const dx = Math.cos(angle) * velocity;
     const dy = Math.sin(angle) * velocity;
@@ -584,6 +834,7 @@ export function Game() {
     }
   };
 
+  // Handle keyboard movement
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!currentUserId) return;
     
@@ -618,8 +869,94 @@ export function Game() {
     }
   };
 
+  // Handle mobile controls
+  const handleMobileMove = (dx: number, dy: number) => {
+    if (!currentUserId) return;
+    
+    const currentPlayer = players.get(currentUserId);
+    if (!currentPlayer || currentPlayer.health <= 0) return;
+    
+    const moveSpeed = 5;
+    const newX = Math.max(
+      PLAYER_SIZE, 
+      Math.min(CANVAS_WIDTH - PLAYER_SIZE, currentPlayer.x + dx * moveSpeed)
+    );
+    const newY = Math.max(
+      PLAYER_SIZE, 
+      Math.min(CANVAS_HEIGHT - PLAYER_SIZE, currentPlayer.y + dy * moveSpeed)
+    );
+    
+    if (newX !== currentPlayer.x || newY !== currentPlayer.y) {
+      updatePlayer(currentUserId, { x: newX, y: newY });
+    }
+  };
+
+  const handleMobileShoot = (x: number, y: number) => {
+    // Convert screen coordinates to canvas coordinates
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const canvasX = x - rect.left;
+    const canvasY = y - rect.top;
+    
+    fireProjectile(canvasX, canvasY);
+  };
+
   const handleReturnToLobby = () => {
     navigate('/game/lobby');
+  };
+
+  const handleRestart = () => {
+    if (isSingleplayer) {
+      // Reset player health and position
+      const currentPlayer = players.get(currentUserId || '');
+      if (currentPlayer) {
+        // Random starting position
+        const x = Math.random() * (CANVAS_WIDTH - PLAYER_SIZE * 2) + PLAYER_SIZE;
+        const y = Math.random() * (CANVAS_HEIGHT - PLAYER_SIZE * 2) + PLAYER_SIZE;
+        
+        updatePlayer(currentUserId || '', { 
+          x, 
+          y, 
+          health: 100 
+        });
+      }
+      
+      // Remove all existing AI players
+      for (const [playerId, player] of players.entries()) {
+        if (player.isAI) {
+          removePlayer(playerId);
+        }
+      }
+      
+      // Create new AI opponents
+      initializeAIOpponents(3);
+      
+      // Reset game state and stats
+      setGameState('playing');
+      setProjectiles([]);
+      setShotCount(0);
+      setCanShoot(true);
+      setGameStats({
+        killCount: 0,
+        shotsFired: 0,
+        shotsHit: 0,
+        damageReceived: 0,
+        lowestHealth: 100,
+        timeWithLowHealth: 0,
+        eliminations: [],
+        killedInRow: 0,
+        multiKills: [],
+        firstKill: false,
+        lastKill: false
+      });
+      lowHealthTimeRef.current = 0;
+      lastTimeRef.current = 0;
+    } else {
+      // For multiplayer, just navigate back to lobby
+      navigate('/game/lobby');
+    }
   };
 
   return (
@@ -640,6 +977,11 @@ export function Game() {
         <div className="absolute top-4 right-4 bg-black bg-opacity-50 text-white p-2 rounded">
           Shots: {MAX_SHOTS - shotCount}
           {!canShoot && <span className="ml-2">(Cooling down...)</span>}
+        </div>
+        
+        {/* Game mode indicator */}
+        <div className="absolute top-4 left-4 bg-black bg-opacity-50 text-white p-2 rounded">
+          {isSingleplayer ? 'Singleplayer' : 'Multiplayer'}
         </div>
         
         {gameState === 'finished' && (
@@ -682,15 +1024,34 @@ export function Game() {
               </div>
             </div>
             
-            <button
-              onClick={handleReturnToLobby}
-              className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
-            >
-              Return to Lobby
-            </button>
+            <div className="flex gap-4">
+              <button
+                onClick={handleRestart}
+                className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700"
+              >
+                {isSingleplayer ? 'Play Again' : 'Return to Lobby'}
+              </button>
+              
+              {isSingleplayer && (
+                <button
+                  onClick={handleReturnToLobby}
+                  className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                >
+                  Main Menu
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
+      
+      {/* Mobile controls */}
+      {isMobile && (
+        <MobileControls
+          onMove={handleMobileMove}
+          onShoot={handleMobileShoot}
+        />
+      )}
       
       {/* Achievement notification */}
       <AchievementNotification 
