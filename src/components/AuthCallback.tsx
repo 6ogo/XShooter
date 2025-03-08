@@ -10,7 +10,20 @@ export function AuthCallback() {
   useEffect(() => {
     const handleAuthCallback = async () => {
       try {
-        // Get session from URL
+        // Handle the hash fragment coming from OAuth redirect
+        if (window.location.hash) {
+          // The hash will include the access token and other OAuth info
+          const { data, error } = await supabase.auth.getSession();
+          
+          if (error) throw error;
+          if (!data.session) {
+            // If no session, try setting it from the hash
+            const { error: signInError } = await supabase.auth.getSession();
+            if (signInError) throw signInError;
+          }
+        }
+        
+        // Get session to verify authentication
         const { data: { session } } = await supabase.auth.getSession();
         
         if (!session) {
@@ -50,6 +63,11 @@ export function AuthCallback() {
             // Add random suffix if username exists
             username = `${username}_${Math.random().toString(36).substring(2, 6)}`;
           }
+          
+          // Update user metadata to include display_name
+          await supabase.auth.updateUser({
+            data: { display_name: username }
+          });
           
           // Create profile
           const { error: profileError } = await supabase
