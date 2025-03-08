@@ -33,7 +33,12 @@ export function Auth() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'twitter',
         options: {
-          redirectTo: window.location.origin  // Just use the root URL
+          redirectTo: `${window.location.origin}/auth/callback`,  // Explicit callback URL
+          queryParams: {
+            // Request additional scopes to get Twitter handle
+            access_type: 'offline',
+            prompt: 'consent'
+          }
         }
       });
 
@@ -69,9 +74,16 @@ export function Auth() {
           throw new Error('Username already taken');
         }
 
+        // Sign up with email and password, and set the username as the display name
         const { data: { user }, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
+          options: {
+            data: {
+              display_name: username, // Set the display_name metadata
+              twitter_handle: null // Initialize twitter_handle as null for email users
+            }
+          }
         });
 
         if (signUpError) throw signUpError;

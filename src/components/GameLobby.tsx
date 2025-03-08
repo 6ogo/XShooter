@@ -1,13 +1,16 @@
+// src/components/GameLobby.tsx
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useGameStore } from '../store/gameStore';
 import { Users, Swords, Trophy, Award, User } from 'lucide-react';
-import { Layout } from './Layout'; // Import the Layout component
+import { Layout } from './Layout';
 
 export function GameLobby() {
   const navigate = useNavigate();
-  const { setGameId, setRoomCode } = useGameStore();
+  const [roomCode, setRoomCodeState] = useState<string>('');
+  const gameLink = `${window.location.origin}/game/${roomCode}`;
+  const { setGameId, setRoomCode, setIsHost } = useGameStore();
   const [activeGames, setActiveGames] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -15,19 +18,23 @@ export function GameLobby() {
 
   useEffect(() => {
     const fetchUserData = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data } = await supabase
-          .from('profiles')
-          .select('username')
-          .eq('id', user.id)
-          .single();
-          
-        if (data) {
-          setUserData({ ...user, username: data.username });
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const { data } = await supabase
+            .from('profiles')
+            .select('username')
+            .eq('id', user.id)
+            .single();
+            
+          if (data) {
+            setUserData({ ...user, username: data.username });
+          }
+        } else {
+          navigate('/');
         }
-      } else {
-        navigate('/');
+      } catch (err) {
+        console.error('Error fetching user data:', err);
       }
     };
     
@@ -75,15 +82,44 @@ export function GameLobby() {
         return;
       }
 
-      // Verify profile exists
+      // First, check if profile exists
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('id')
         .eq('id', user.id)
         .single();
 
+      // If profile doesn't exist, create one
       if (profileError || !profile) {
-        throw new Error('Profile not found. Please sign up first.');
+        const username = user.email?.split('@')[0] || `player_${Math.random().toString(36).substring(2, 10)}`;
+        
+        // Create profile
+        const { error: newProfileError } = await supabase
+          .from('profiles')
+          .insert([{ 
+            id: user.id, 
+            username 
+          }]);
+          
+        if (newProfileError) {
+          throw new Error('Failed to create profile. Please try again.');
+        }
+        
+        // Create leaderboard entry
+        const { error: leaderboardError } = await supabase
+          .from('leaderboard')
+          .insert([{ 
+            player_id: user.id,
+            wins: 0,
+            total_kills: 0,
+            total_shots: 0,
+            shots_hit: 0,
+            games_played: 0
+          }]);
+          
+        if (leaderboardError) {
+          throw new Error('Failed to initialize leaderboard. Please try again.');
+        }
       }
 
       const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -104,8 +140,8 @@ export function GameLobby() {
       if (!game) throw new Error('Failed to create game');
 
       setGameId(game.id);
-      setRoomCode(roomCode);
-      setIsHost(true); // Set the isHost flag to true
+      setRoomCodeState(roomCode);
+      setIsHost(true);
       navigate(`/game/${game.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create game');
@@ -128,7 +164,7 @@ export function GameLobby() {
   };
 
   return (
-    <Layout> {/* Wrap the component with Layout */}
+    <Layout>
       <div className="p-6">
         <div className="max-w-4xl mx-auto">
           {/* Header with username and sign out */}
@@ -255,8 +291,4 @@ export function GameLobby() {
       </div>
     </Layout>
   );
-}
-
-function setIsHost(_arg0: boolean) {
-  throw new Error('Function not implemented.');
 }

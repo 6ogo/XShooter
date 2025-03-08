@@ -8,11 +8,8 @@ import { Achievements } from './components/Achievements';
 import { Settings } from './components/Settings';
 import { PrivacyPolicy } from './components/PrivacyPolicy.tsx';
 import { TermsOfService } from './components/TermsOfService.tsx';
-import { useGameStore } from './store/gameStore';
 
 function App() {
-  const { gameId } = useGameStore();
-
   return (
     <Router>
       <div className="min-h-screen bg-gray-900">
