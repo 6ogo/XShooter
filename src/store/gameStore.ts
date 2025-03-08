@@ -28,6 +28,7 @@ interface GameState {
   roomCode: string | null;
   setGameId: (id: string) => void;
   setRoomCode: (code: string) => void;
+  setIsHost: (isHost: boolean) => void;
   updatePlayer: (playerId: string, data: Partial<Player>) => void;
   removePlayer: (playerId: string) => void;
   reset: () => void;
@@ -40,6 +41,7 @@ export const useGameStore = create<GameState>((set) => ({
   roomCode: null,
   setGameId: (id) => set({ gameId: id }),
   setRoomCode: (code) => set({ roomCode: code }),
+  setIsHost: (isHost) => set({ isHost }),
   updatePlayer: (playerId, data) =>
     set((state) => {
       const players = new Map(state.players);

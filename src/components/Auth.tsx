@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { Gamepad2, Trophy, Users, Twitter } from 'lucide-react';
 
@@ -10,6 +10,7 @@ export function Auth() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -47,6 +48,13 @@ export function Auth() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+
+    // For sign up, require terms agreement
+    if (isSignUp && !agreedToTerms) {
+      setError('You must agree to the Terms of Service and Privacy Policy to continue');
+      setLoading(false);
+      return;
+    }
 
     try {
       if (isSignUp) {
@@ -216,13 +224,39 @@ export function Auth() {
               </div>
             )}
 
+            {isSignUp && (
+              <div className="flex items-start">
+                <div className="flex items-center h-5">
+                  <input
+                    id="terms"
+                    type="checkbox"
+                    checked={agreedToTerms}
+                    onChange={(e) => setAgreedToTerms(e.target.checked)}
+                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                  />
+                </div>
+                <div className="ml-3 text-sm">
+                  <label htmlFor="terms" className="text-gray-600">
+                    I agree to the{' '}
+                    <Link to="/terms" className="text-indigo-600 hover:text-indigo-500" target="_blank">
+                      Terms of Service
+                    </Link>{' '}
+                    and{' '}
+                    <Link to="/privacy" className="text-indigo-600 hover:text-indigo-500" target="_blank">
+                      Privacy Policy
+                    </Link>
+                  </label>
+                </div>
+              </div>
+            )}
+
             {error && (
               <p className="text-red-600 text-sm text-center">{error}</p>
             )}
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || (isSignUp && !agreedToTerms)}
               className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
             >
               {loading ? 'Loading...' : isSignUp ? 'Sign Up' : 'Sign In'}
@@ -239,6 +273,14 @@ export function Auth() {
                 : "Don't have an account? Sign up"}
             </button>
           </div>
+        </div>
+
+        {/* Footer with policy links */}
+        <div className="text-center mt-4">
+          <nav className="flex justify-center space-x-4 text-xs text-gray-400">
+            <Link to="/terms" className="hover:text-white">Terms of Service</Link>
+            <Link to="/privacy" className="hover:text-white">Privacy Policy</Link>
+          </nav>
         </div>
       </div>
     </div>
