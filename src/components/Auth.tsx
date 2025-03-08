@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Gamepad2, Trophy, Users } from 'lucide-react';
+import { Gamepad2, Trophy, Users, Twitter } from 'lucide-react';
 
 export function Auth() {
   const [email, setEmail] = useState('');
@@ -11,6 +11,38 @@ export function Auth() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    // Check if user is already logged in
+    const checkUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        navigate('/game/lobby');
+      }
+    };
+    
+    checkUser();
+  }, [navigate]);
+
+  // Handle X Authentication
+  const handleXAuth = async () => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'twitter',
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`
+        }
+      });
+      
+      if (error) throw error;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to authenticate with X');
+      setLoading(false);
+    }
+  };
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -107,6 +139,27 @@ export function Auth() {
             <div className="text-center">
               <Trophy className="mx-auto h-8 w-8 text-indigo-600" />
               <p className="mt-2 text-sm text-gray-600">Leaderboards</p>
+            </div>
+          </div>
+
+          {/* X Authentication Button */}
+          <div className="mb-6">
+            <button
+              onClick={handleXAuth}
+              disabled={loading}
+              className="w-full flex justify-center items-center gap-2 py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+            >
+              <Twitter className="h-5 w-5 text-blue-400" />
+              {loading ? 'Loading...' : 'Sign in with X'}
+            </button>
+          </div>
+
+          <div className="relative my-6">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-300"></div>
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-white text-gray-500">Or continue with email</span>
             </div>
           </div>
 

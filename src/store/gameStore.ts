@@ -7,6 +7,7 @@ interface Player {
   y: number;
   health: number;
   username: string;
+  avatar_url?: string;  // Added avatar_url for player icons
 }
 
 interface GameState {
@@ -35,7 +36,14 @@ export const useGameStore = create<GameState>((set) => ({
       if (currentPlayer) {
         players.set(playerId, { ...currentPlayer, ...data });
       } else {
-        players.set(playerId, { id: playerId, x: 0, y: 0, health: 100, username: '', ...data });
+        players.set(playerId, { 
+          id: playerId, 
+          x: 0, 
+          y: 0, 
+          health: 100, 
+          username: '', 
+          ...data 
+        });
       }
       return { players };
     }),
