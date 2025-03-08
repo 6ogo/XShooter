@@ -6,6 +6,8 @@ import { AuthCallback } from './components/AuthCallback';
 import { GameLobby } from './components/GameLobby';
 import { Achievements } from './components/Achievements';
 import { Settings } from './components/Settings';
+import { PrivacyPolicy } from './components/PrivacyPolicy.tsx';
+import { TermsOfService } from './components/TermsOfService.tsx';
 import { useGameStore } from './store/gameStore';
 
 function App() {
@@ -22,6 +24,8 @@ function App() {
           <Route path="/leaderboard" element={<Leaderboard />} />
           <Route path="/achievements" element={<Achievements />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/privacy" element={<PrivacyPolicy />} />
+          <Route path="/terms" element={<TermsOfService />} />
         </Routes>
       </div>
     </Router>
