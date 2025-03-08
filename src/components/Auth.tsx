@@ -33,7 +33,12 @@ export function Auth() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'twitter',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`  // Explicit callback URL
+          redirectTo: `${window.location.origin}/auth/callback`,  // Explicit callback URL
+          queryParams: {
+            // Request additional scopes to get Twitter handle
+            access_type: 'offline',
+            prompt: 'consent'
+          }
         }
       });
 
@@ -75,7 +80,8 @@ export function Auth() {
           password,
           options: {
             data: {
-              display_name: username // Set the display_name metadata
+              display_name: username, // Set the display_name metadata
+              twitter_handle: null // Initialize twitter_handle as null for email users
             }
           }
         });

@@ -94,8 +94,8 @@ export function Achievements() {
     fetchAchievements();
   }, [navigate]);
 
-  const getAchievementIcon = (iconName: string) => {
-    // Map icon names to Lucide React icons or use Award as default
+  const getAchievementIcon = () => {
+    // Use Award as default icon for all achievements
     return <Award className="h-6 w-6" />;
   };
 
@@ -188,7 +188,7 @@ export function Achievements() {
                       : 'bg-gray-700'
                   }`}>
                     {achievement.unlocked ? (
-                      getAchievementIcon(achievement.icon)
+                      getAchievementIcon()
                     ) : (
                       <Lock className="h-6 w-6 text-gray-400" />
                     )}
