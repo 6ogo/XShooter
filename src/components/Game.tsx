@@ -32,12 +32,12 @@ export function Game() {
   const navigate = useNavigate();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { players, updatePlayer, removePlayer } = useGameStore();
-  const [projectiles, setProjectiles] = useState<Projectile[]>([]);
-  const [shotCount, setShotCount] = useState(0);
-  const [canShoot, setCanShoot] = useState(true);
-  const [gameState, setGameState] = useState<'waiting' | 'playing' | 'finished'>('waiting');
+  const [, setProjectiles] = useState<Projectile[]>([]);
+  const [] = useState(0);
+  const [] = useState(true);
+  const [, setGameState] = useState<'waiting' | 'playing' | 'finished'>('waiting');
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [playerAvatars, setPlayerAvatars] = useState<PlayerAvatarCache>({});
+  const [] = useState<PlayerAvatarCache>({});
   const [isMobile, setIsMobile] = useState(false);
   const [isSingleplayer, setIsSingleplayer] = useState(false);
   const [twitterHandle, setTwitterHandle] = useState<string | null>(null);
@@ -45,8 +45,8 @@ export function Game() {
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
-  const { gameSettings } = useGameStore();
-  const [gameStats, setGameStats] = useState({
+  const {} = useGameStore();
+  const [] = useState({
     killCount: 0,
     shotsFired: 0,
     shotsHit: 0,
