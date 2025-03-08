@@ -1,0 +1,49 @@
+import { create } from 'zustand';
+import { supabase } from '../lib/supabase';
+
+interface Player {
+  id: string;
+  x: number;
+  y: number;
+  health: number;
+  username: string;
+}
+
+interface GameState {
+  players: Map<string, Player>;
+  gameId: string | null;
+  isHost: boolean;
+  roomCode: string | null;
+  setGameId: (id: string) => void;
+  setRoomCode: (code: string) => void;
+  updatePlayer: (playerId: string, data: Partial<Player>) => void;
+  removePlayer: (playerId: string) => void;
+  reset: () => void;
+}
+
+export const useGameStore = create<GameState>((set) => ({
+  players: new Map(),
+  gameId: null,
+  isHost: false,
+  roomCode: null,
+  setGameId: (id) => set({ gameId: id }),
+  setRoomCode: (code) => set({ roomCode: code }),
+  updatePlayer: (playerId, data) =>
+    set((state) => {
+      const players = new Map(state.players);
+      const currentPlayer = players.get(playerId);
+      if (currentPlayer) {
+        players.set(playerId, { ...currentPlayer, ...data });
+      } else {
+        players.set(playerId, { id: playerId, x: 0, y: 0, health: 100, username: '', ...data });
+      }
+      return { players };
+    }),
+  removePlayer: (playerId) =>
+    set((state) => {
+      const players = new Map(state.players);
+      players.delete(playerId);
+      return { players };
+    }),
+  reset: () => set({ players: new Map(), gameId: null, isHost: false, roomCode: null }),
+}));
