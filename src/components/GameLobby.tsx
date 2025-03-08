@@ -1,27 +1,17 @@
+// src/components/GameLobby.tsx
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Player, useGameStore } from '../store/gameStore';
-import { NavigationBar } from './NavigationBar';
-import { Twitter } from 'lucide-react';
-
-interface GameLobbyProps {}
+import { useGameStore } from '../store/gameStore';
+import { Users, Swords, Trophy, Award, User } from 'lucide-react';
+import { Layout } from './Layout';
 
 export function GameLobby({}: GameLobbyProps) {
   const navigate = useNavigate();
-  const { 
-    setGameId, 
-    setRoomCode, 
-    setIsHost, 
-    setMaxPlayers, 
-    updatePlayer 
-  } = useGameStore() as {
-    setGameId: (id: string) => void;
-    setRoomCode: (code: string | null) => void; // Explicitly type as string | null
-    setIsHost: (isHost: boolean) => void;
-    setMaxPlayers: (maxPlayers: number) => void;
-    updatePlayer: (playerId: string, data: Partial<Player>) => void;
-  };
+  const [roomCode, setRoomCodeState] = useState<string>('');
+  const gameLink = `${window.location.origin}/game/${roomCode}`;
+  const { setGameId, setRoomCode, setIsHost } = useGameStore();
+  const [activeGames, setActiveGames] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [creatingGame, setCreatingGame] = useState(false);
   const [joiningGame, setJoiningGame] = useState(false);
@@ -31,7 +21,65 @@ export function GameLobby({}: GameLobbyProps) {
   const [twitterHandle, setTwitterHandle] = useState<string | null>(null);
 
   useEffect(() => {
-    const checkAuth = async () => {
+    const fetchUserData = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const { data } = await supabase
+            .from('profiles')
+            .select('username')
+            .eq('id', user.id)
+            .single();
+            
+          if (data) {
+            setUserData({ ...user, username: data.username });
+          }
+        } else {
+          navigate('/');
+        }
+      } catch (err) {
+        console.error('Error fetching user data:', err);
+      }
+    };
+    
+    fetchUserData();
+  }, [navigate]);
+
+  useEffect(() => {
+    const fetchGames = async () => {
+      const { data: games, error } = await supabase
+        .from('games')
+        .select('*, profiles!games_host_id_fkey(username)')
+        .eq('status', 'waiting');
+
+      if (!error && games) {
+        setActiveGames(games);
+      }
+      setLoading(false);
+    };
+
+    fetchGames();
+
+    // Subscribe to game updates
+    const gameSubscription = supabase
+      .channel('games')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'games'
+      }, () => {
+        fetchGames();
+      })
+      .subscribe();
+
+    return () => {
+      gameSubscription.unsubscribe();
+    };
+  }, []);
+
+  const createGame = async () => {
+    try {
+      setError(null);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         navigate('/');
@@ -40,21 +88,44 @@ export function GameLobby({}: GameLobbyProps) {
       setCurrentUser(user);
       setTwitterHandle(user.user_metadata?.preferred_username || user.user_metadata?.user_name || null);
 
-      const { data: profile } = await supabase
+      // First, check if profile exists
+      const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('username')
         .eq('id', user.id)
         .single();
 
-      if (profile) {
-        updatePlayer(user.id, {
-          id: user.id,
-          username: profile.username,
-          x: 0,
-          y: 0,
-          health: 100,
-          avatar_url: user.user_metadata?.avatar_url,
-        });
+      // If profile doesn't exist, create one
+      if (profileError || !profile) {
+        const username = user.email?.split('@')[0] || `player_${Math.random().toString(36).substring(2, 10)}`;
+        
+        // Create profile
+        const { error: newProfileError } = await supabase
+          .from('profiles')
+          .insert([{ 
+            id: user.id, 
+            username 
+          }]);
+          
+        if (newProfileError) {
+          throw new Error('Failed to create profile. Please try again.');
+        }
+        
+        // Create leaderboard entry
+        const { error: leaderboardError } = await supabase
+          .from('leaderboard')
+          .insert([{ 
+            player_id: user.id,
+            wins: 0,
+            total_kills: 0,
+            total_shots: 0,
+            shots_hit: 0,
+            games_played: 0
+          }]);
+          
+        if (leaderboardError) {
+          throw new Error('Failed to initialize leaderboard. Please try again.');
+        }
       }
       setLoading(false);
     };
@@ -95,9 +166,8 @@ export function GameLobby({}: GameLobbyProps) {
         });
 
       setGameId(game.id);
-      setRoomCode(generatedRoomCode);
+      setRoomCodeState(roomCode);
       setIsHost(true);
-      setMaxPlayers(18);
       navigate(`/game/${game.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create game');
@@ -231,10 +301,44 @@ export function GameLobby({}: GameLobbyProps) {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900">
-      <NavigationBar currentPage="lobby" />
-      <div className="container mx-auto px-4 py-8">
-        <div className="max-w-2xl mx-auto">
+    <Layout>
+      <div className="p-6">
+        <div className="max-w-4xl mx-auto">
+          {/* Header with username and sign out */}
+          {userData && (
+            <div className="flex justify-between items-center mb-6 text-white">
+              <div className="text-sm">
+                Playing as <span className="font-medium">{userData.username}</span>
+              </div>
+              <button 
+                onClick={handleSignOut}
+                className="text-sm text-gray-400 hover:text-white"
+              >
+                Sign Out
+              </button>
+            </div>
+          )}
+          
+          <div className="flex justify-between items-center mb-8">
+            <h1 className="text-3xl font-bold text-white">Game Lobby</h1>
+            <div className="flex gap-4">
+              <button
+                onClick={() => navigate('/achievements')}
+                className="flex items-center gap-2 px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700"
+              >
+                <Award size={20} />
+                Achievements
+              </button>
+              <button
+                onClick={() => navigate('/leaderboard')}
+                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+              >
+                <Trophy size={20} />
+                Leaderboard
+              </button>
+            </div>
+          </div>
+
           {error && (
             <div className="mb-6 p-4 bg-red-600 text-white rounded-lg">
               {error}

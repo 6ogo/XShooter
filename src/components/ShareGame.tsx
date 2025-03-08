@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Twitter, Copy, Check, Send } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 
 interface ShareGameProps {
   roomCode: string;
@@ -9,8 +10,8 @@ interface ShareGameProps {
 export function ShareGame({ roomCode, gameLink }: ShareGameProps) {
   const [copied, setCopied] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Format tweet text
   const tweetText = `Join me for a game of XShooter! Use room code: ${roomCode} or click the link to join directly. #XShooter #Gaming`;
   const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}&url=${encodeURIComponent(gameLink)}`;
 
@@ -20,22 +21,39 @@ export function ShareGame({ roomCode, gameLink }: ShareGameProps) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Send direct invite (simulated)
   const sendDirectInvite = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const username = formData.get('username') as string;
-    
-    // Reset form
-    e.currentTarget.reset();
-    
-    // Show success message
-    setShowSuccess(true);
-    setTimeout(() => setShowSuccess(false), 3000);
-    
-    // In a real implementation, you would integrate with X API to send direct messages
-    // For now, this is just a UI demonstration
-    console.log(`Sending invite to: ${username}`);
+
+    setError(null);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData.session;
+
+      if (!session || !session.provider_token || !session.provider_refresh_token) {
+        setError('Twitter authentication required');
+        return;
+      }
+
+      const { error: invokeError } = await supabase.functions.invoke('send-invite', {
+        body: {
+          handle: username,
+          gameLink,
+          accessToken: session.provider_token,
+          accessTokenSecret: session.provider_refresh_token,
+        },
+      });
+
+      if (invokeError) throw invokeError;
+
+      e.currentTarget.reset();
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
+    } catch (err) {
+      setError('Failed to send invite');
+      console.error(err);
+    }
   };
 
   return (
@@ -44,10 +62,8 @@ export function ShareGame({ roomCode, gameLink }: ShareGameProps) {
       <div className="space-y-6">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Room Code</label>
-          <div className="flex items-center">
-            <div className="bg-gray-100 px-4 py-2 rounded-lg font-mono text-lg font-bold tracking-wider flex-grow">
-              {roomCode}
-            </div>
+          <div className="bg-gray-100 px-4 py-2 rounded-lg font-mono text-lg font-bold tracking-wider">
+            {roomCode}
           </div>
         </div>
         <div>
@@ -69,8 +85,6 @@ export function ShareGame({ roomCode, gameLink }: ShareGameProps) {
             </button>
           </div>
         </div>
-        
-        {/* Share on X */}
         <div>
           <a
             href={tweetUrl}
@@ -82,12 +96,8 @@ export function ShareGame({ roomCode, gameLink }: ShareGameProps) {
             Share on X
           </a>
         </div>
-        
-        {/* Direct Invite */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Invite by X Username
-          </label>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Invite by X Username</label>
           <form onSubmit={sendDirectInvite} className="flex mt-1">
             <div className="flex-grow flex rounded-md shadow-sm">
               <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 border-gray-300 bg-gray-50 text-gray-500">
@@ -109,13 +119,14 @@ export function ShareGame({ roomCode, gameLink }: ShareGameProps) {
               Send
             </button>
           </form>
-          
-          {/* Success message */}
           {showSuccess && (
             <div className="mt-2 text-sm text-green-600 flex items-center gap-1">
               <Check size={14} />
               Invite sent successfully!
             </div>
+          )}
+          {error && (
+            <div className="mt-2 text-sm text-red-600">{error}</div>
           )}
           <p className="mt-2 text-xs text-gray-500">
             This will send a notification to the user on X with your game invite
@@ -125,5 +136,3 @@ export function ShareGame({ roomCode, gameLink }: ShareGameProps) {
     </div>
   );
 }
-
-export default ShareGame;
