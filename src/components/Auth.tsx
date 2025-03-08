@@ -24,7 +24,6 @@ export function Auth() {
     checkUser();
   }, [navigate]);
 
-  // Handle X Authentication
   const handleXAuth = async () => {
     setLoading(true);
     setError(null);
@@ -33,7 +32,7 @@ export function Auth() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'twitter',
         options: {
-          redirectTo: window.location.origin + '/auth/callback'
+          redirectTo: window.location.origin  // Just use the root URL
         }
       });
 
@@ -43,7 +42,7 @@ export function Auth() {
       setLoading(false);
     }
   };
-  
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
