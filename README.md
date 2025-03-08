@@ -1,6 +1,6 @@
 # XShooter
 
-[XShooter](https://github.com/6ogo/XShooter/) is a fast-paced 2D multiplayer shooter game where players compete to be the last one standing. Viewed from a top-down perspective, players are represented by their X profile pictures and shoot small balls at each other to reduce opponents' health. Each player starts with 100 HP, can fire 5 shots before a 3-second cooldown, and plays until eliminated. Log in with your X account, invite friends to custom rooms or join quickplay lobbies, and climb the leaderboard by tracking wins, kills, and accuracy.
+[XShooter](https://x-shooter.vercel.app/) is a fast-paced 2D multiplayer shooter game where players compete to be the last one standing. Viewed from a top-down perspective, players are represented by their X profile pictures and shoot small balls at each other to reduce opponents' health. Each player starts with 100 HP, can fire 5 shots before a 3-second cooldown, and plays until eliminated. Log in with your X account, invite friends to custom rooms or join quickplay lobbies, and climb the leaderboard by tracking wins, kills, and accuracy.
 
 ## Features
 
