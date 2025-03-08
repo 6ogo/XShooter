@@ -1,19 +1,19 @@
-import { useState } from 'react';
-import { Twitter, Copy, Check, Send, Share2, ExternalLink } from 'lucide-react';
-import { CopyToClipboard } from '../utils/Clipboard';
+import React, { useState } from 'react';
+import { Twitter, Copy, Check, Send } from 'lucide-react';
 
 interface ShareGameProps {
   roomCode: string;
   gameLink: string;
-  onInvitePlayer?: () => void;
 }
 
 export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps) {
+  const [showDirectMessage, setShowDirectMessage] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showQRCode, setShowQRCode] = useState(false);
-
-  const tweetText = `Join me for a game of XShooter! Use room code: ${roomCode} or click the link to join directly: ${gameLink} #XShooter #Gaming`;
-  const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}`;
+  
+  // Format tweet text
+  const tweetText = `Join me for a game of XShooter! Use room code: ${roomCode} or click the link to join directly. #XShooter #Gaming`;
+  const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}&url=${encodeURIComponent(gameLink)}`;
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(gameLink);
@@ -21,6 +21,7 @@ export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Generate QR code URL
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(gameLink)}`;
 
   return (
@@ -33,7 +34,6 @@ export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps
             <div className="bg-gray-100 px-4 py-2 rounded-lg font-mono text-lg font-bold tracking-wider flex-grow">
               {roomCode}
             </div>
-            <CopyToClipboard text={roomCode} className="ml-2" />
           </div>
         </div>
         <div>
@@ -55,16 +55,21 @@ export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps
             </button>
           </div>
         </div>
+        
+        {/* Sharing Options */}
         <div className="grid grid-cols-2 gap-4">
+          {/* Share on X */}
           <a
             href={tweetUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex justify-center items-center gap-2 px-4 py-3 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-400 hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-400"
+            className="w-full inline-flex justify-center items-center gap-2 px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-400 hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-400"
           >
             <Twitter size={16} />
             Share on X
           </a>
+          
+          {/* Invite by Username */}
           <button
             onClick={onInvitePlayer}
             className="inline-flex justify-center items-center gap-2 px-4 py-3 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
@@ -72,6 +77,8 @@ export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps
             <Send size={16} />
             Invite Player
           </button>
+          
+          {/* Generate QR Code */}
           <button
             onClick={() => setShowQRCode(!showQRCode)}
             className="inline-flex justify-center items-center gap-2 px-4 py-3 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
@@ -79,6 +86,8 @@ export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps
             <Share2 size={16} />
             {showQRCode ? 'Hide QR Code' : 'Show QR Code'}
           </button>
+          
+          {/* Copy Join Command */}
           <button
             onClick={() => {
               navigator.clipboard.writeText(`/join ${roomCode}`);
@@ -91,18 +100,38 @@ export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps
             Copy Join Command
           </button>
         </div>
+        
+        {/* QR Code */}
         {showQRCode && (
           <div className="mt-4 flex justify-center">
             <div className="p-4 bg-white border rounded-lg shadow-sm">
-              <img
-                src={qrCodeUrl}
-                alt="QR Code for Game Link"
+              <img 
+                src={qrCodeUrl} 
+                alt="QR Code for Game Link" 
                 className="w-48 h-48"
               />
               <p className="text-center text-sm text-gray-500 mt-2">Scan to join game</p>
             </div>
-          </div>
-        )}
+            <button
+              type="submit"
+              className="ml-2 inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+            >
+              <Send size={16} className="mr-2" />
+              Send
+            </button>
+          </form>
+          
+          {/* Success message */}
+          {showSuccess && (
+            <div className="mt-2 text-sm text-green-600 flex items-center gap-1">
+              <Check size={14} />
+              Invite sent successfully!
+            </div>
+          )}
+          <p className="mt-2 text-xs text-gray-500">
+            This will send a notification to the user on X with your game invite
+          </p>
+        </div>
       </div>
     </div>
   );

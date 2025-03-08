@@ -1,4 +1,3 @@
-// src/components/AuthCallback.tsx
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
@@ -11,11 +10,24 @@ export function AuthCallback() {
   useEffect(() => {
     const handleAuthCallback = async () => {
       try {
-        // Get current session
+        // Handle the hash fragment coming from OAuth redirect
+        if (window.location.hash) {
+          // The hash will include the access token and other OAuth info
+          const { data, error } = await supabase.auth.getSession();
+          
+          if (error) throw error;
+          if (!data.session) {
+            // If no session, try setting it from the hash
+            const { error: signInError } = await supabase.auth.getSession();
+            if (signInError) throw signInError;
+          }
+        }
+        
+        // Get session to verify authentication
         const { data: { session } } = await supabase.auth.getSession();
         
         if (!session) {
-          throw new Error('No session found. Authentication failed.');
+          throw new Error('No session found');
         }
         
         // Get user data
@@ -23,24 +35,6 @@ export function AuthCallback() {
         
         if (!user) {
           throw new Error('No user found');
-        }
-        
-        // Extract Twitter username from provider token
-        let twitterHandle = null;
-        if (user.app_metadata?.provider === 'twitter') {
-          twitterHandle = user.user_metadata?.preferred_username || 
-                           user.user_metadata?.user_name || 
-                           user.user_metadata?.full_name?.replace(/\s+/g, '_').toLowerCase();
-        }
-        
-        // Update user metadata to include twitter_handle if found
-        if (twitterHandle) {
-          await supabase.auth.updateUser({
-            data: { 
-              twitter_handle: twitterHandle,
-              display_name: twitterHandle 
-            }
-          });
         }
         
         // Check if profile exists
@@ -51,24 +45,29 @@ export function AuthCallback() {
           .single();
           
         if (!existingProfile) {
-          // Create a profile for the user
-          // Generate a username based on Twitter info or email
-          let username = twitterHandle || 
-                         user.user_metadata?.preferred_username || 
-                         user.user_metadata?.full_name?.replace(/\s+/g, '_').toLowerCase() || 
-                         user.email?.split('@')[0] || 
-                         `player_${Math.random().toString(36).substring(2, 10)}`;
+          // Create a profile for the X user
+          // Generate a username based on X info or email
+          let username = user.user_metadata?.preferred_username || 
+                          user.user_metadata?.full_name?.replace(/\s+/g, '_').toLowerCase() || 
+                          user.email?.split('@')[0] || 
+                          `player_${Math.random().toString(36).substring(2, 10)}`;
           
           // Make sure username is unique
           const { data: existingUser } = await supabase
             .from('profiles')
             .select('username')
-            .eq('username', username);
+            .eq('username', username)
+            .single();
             
-          if (existingUser && existingUser.length > 0) {
+          if (existingUser) {
             // Add random suffix if username exists
             username = `${username}_${Math.random().toString(36).substring(2, 6)}`;
           }
+          
+          // Update user metadata to include display_name
+          await supabase.auth.updateUser({
+            data: { display_name: username }
+          });
           
           // Create profile
           const { error: profileError } = await supabase

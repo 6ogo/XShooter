@@ -1,4 +1,3 @@
-// src/components/Auth.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
@@ -12,7 +11,6 @@ export function Auth() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
-  const [isLoginWithUsername, setIsLoginWithUsername] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -35,8 +33,12 @@ export function Auth() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'twitter',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`, 
-          scopes: 'tweet.read users.read',
+          redirectTo: `${window.location.origin}/auth/callback`,  // Explicit callback URL
+          queryParams: {
+            // Request additional scopes to get Twitter handle
+            access_type: 'offline',
+            prompt: 'consent'
+          }
         }
       });
 
@@ -118,52 +120,12 @@ export function Auth() {
         // Redirect to game lobby after successful signup
         navigate('/game/lobby');
       } else {
-        // Login with username or email
-        if (isLoginWithUsername) {
-          // First get user's email using username
-          const { data: profileData, error: profileError } = await supabase
-            .from('profiles')
-            .select('id')
-            .eq('username', username)
-            .single();
-            
-          if (profileError || !profileData) {
-            throw new Error('Username not found');
-          }
-          
-          // Then get user's email using user ID
-          const { data: userData, error: userError } = await supabase
-            .from('auth.users')
-            .select('email')
-            .eq('id', profileData.id)
-            .single();
-            
-          if (userError || !userData) {
-            // If direct access fails, try normal login with password
-            const { error: signInError } = await supabase.auth.signInWithPassword({
-              email: username, // Try using username as email
-              password,
-            });
-            
-            if (signInError) throw new Error('Invalid username or password');
-          } else {
-            // Login with the retrieved email
-            const { error: signInError } = await supabase.auth.signInWithPassword({
-              email: userData.email,
-              password,
-            });
-            
-            if (signInError) throw signInError;
-          }
-        } else {
-          // Regular email login
-          const { error: signInError } = await supabase.auth.signInWithPassword({
-            email,
-            password,
-          });
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
 
-          if (signInError) throw signInError;
-        }
+        if (signInError) throw signInError;
 
         // Redirect to game lobby after successful login
         navigate('/game/lobby');
@@ -173,14 +135,6 @@ export function Auth() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const toggleLoginMethod = () => {
-    setIsLoginWithUsername(!isLoginWithUsername);
-    // Reset form fields
-    setEmail('');
-    setUsername('');
-    setPassword('');
   };
 
   return (
@@ -224,85 +178,27 @@ export function Auth() {
               <div className="w-full border-t border-gray-300"></div>
             </div>
             <div className="relative flex justify-center text-sm">
-              <span className="px-2 bg-white text-gray-500">Or continue with {isSignUp ? 'email' : (isLoginWithUsername ? 'username' : 'email')}</span>
+              <span className="px-2 bg-white text-gray-500">Or continue with email</span>
             </div>
           </div>
 
           <form onSubmit={handleAuth} className="space-y-6">
-            {!isSignUp && !isLoginWithUsername && (
-              <div>
-                <label
-                  htmlFor="email"
-                  className="block text-sm font-medium text-gray-700"
-                >
-                  Email
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                />
-              </div>
-            )}
-
-            {!isSignUp && isLoginWithUsername && (
-              <div>
-                <label
-                  htmlFor="username"
-                  className="block text-sm font-medium text-gray-700"
-                >
-                  Username
-                </label>
-                <input
-                  id="username"
-                  type="text"
-                  required
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                />
-              </div>
-            )}
-
-            {isSignUp && (
-              <>
-                <div>
-                  <label
-                    htmlFor="email"
-                    className="block text-sm font-medium text-gray-700"
-                  >
-                    Email
-                  </label>
-                  <input
-                    id="email"
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="username"
-                    className="block text-sm font-medium text-gray-700"
-                  >
-                    Username
-                  </label>
-                  <input
-                    id="username"
-                    type="text"
-                    required
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                  />
-                </div>
-              </>
-            )}
+            <div>
+              <label
+                htmlFor="email"
+                className="block text-sm font-medium text-gray-700"
+              >
+                Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+              />
+            </div>
 
             <div>
               <label
@@ -320,6 +216,25 @@ export function Auth() {
                 className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
               />
             </div>
+
+            {isSignUp && (
+              <div>
+                <label
+                  htmlFor="username"
+                  className="block text-sm font-medium text-gray-700"
+                >
+                  Username
+                </label>
+                <input
+                  id="username"
+                  type="text"
+                  required
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                />
+              </div>
+            )}
 
             {isSignUp && (
               <div className="flex items-start">
@@ -370,19 +285,6 @@ export function Auth() {
                 : "Don't have an account? Sign up"}
             </button>
           </div>
-
-          {!isSignUp && (
-            <div className="mt-2 text-center">
-              <button
-                onClick={toggleLoginMethod}
-                className="text-xs text-gray-500 hover:text-gray-700"
-              >
-                {isLoginWithUsername 
-                  ? 'Login with email instead' 
-                  : 'Login with username instead'}
-              </button>
-            </div>
-          )}
         </div>
 
         {/* Footer with policy links */}

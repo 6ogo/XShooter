@@ -45,8 +45,8 @@ export function Game() {
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
-  const {} = useGameStore();
-  const [] = useState({
+  const { gameSettings } = useGameStore();
+  const [gameStats, setGameStats] = useState({
     killCount: 0,
     shotsFired: 0,
     shotsHit: 0,

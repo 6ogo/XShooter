@@ -1,41 +1,15 @@
-import { useState, useEffect } from 'react';
-import { Volume2, Monitor, Zap, Maximize } from 'lucide-react';
+import { useState } from 'react';
+import { Volume2, Monitor, Zap } from 'lucide-react';
 
 interface GameSettingsProps {
-  initialSettings?: {
-    volume?: number;
-    graphicsQuality?: string;
-    musicEnabled?: boolean;
-    sfxEnabled?: boolean;
-    fullscreen?: boolean;
-  };
-  onSave: (settings: any) => void;
   onClose: () => void;
 }
 
-export function GameSettings({ initialSettings, onSave, onClose }: GameSettingsProps) {
-  const [volume, setVolume] = useState(initialSettings?.volume || 50);
-  const [graphicsQuality, setGraphicsQuality] = useState(initialSettings?.graphicsQuality || 'medium');
-  const [musicEnabled, setMusicEnabled] = useState(initialSettings?.musicEnabled !== undefined ? initialSettings.musicEnabled : true);
-  const [sfxEnabled, setSfxEnabled] = useState(initialSettings?.sfxEnabled !== undefined ? initialSettings.sfxEnabled : true);
-  const [fullscreen, setFullscreen] = useState(initialSettings?.fullscreen || false);
-
-  useEffect(() => {
-    // Apply fullscreen mode if enabled
-    if (fullscreen) {
-      if (document.documentElement.requestFullscreen) {
-        document.documentElement.requestFullscreen().catch(err => {
-          console.error('Error attempting to enable fullscreen:', err);
-        });
-      }
-    } else {
-      if (document.fullscreenElement && document.exitFullscreen) {
-        document.exitFullscreen().catch(err => {
-          console.error('Error attempting to exit fullscreen:', err);
-        });
-      }
-    }
-  }, [fullscreen]);
+export function GameSettings({ onClose }: GameSettingsProps) {
+  const [volume, setVolume] = useState(50);
+  const [graphicsQuality, setGraphicsQuality] = useState('medium');
+  const [musicEnabled, setMusicEnabled] = useState(true);
+  const [sfxEnabled, setSfxEnabled] = useState(true);
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setVolume(parseInt(e.target.value));
@@ -45,19 +19,16 @@ export function GameSettings({ initialSettings, onSave, onClose }: GameSettingsP
     setGraphicsQuality(quality);
   };
 
-  const toggleFullscreen = () => {
-    setFullscreen(!fullscreen);
-  };
-
   const saveSettings = () => {
-    // Save settings
-    onSave({
+    // Save settings to local storage
+    localStorage.setItem('gameSettings', JSON.stringify({
       volume,
       graphicsQuality,
       musicEnabled,
-      sfxEnabled,
-      fullscreen
-    });
+      sfxEnabled
+    }));
+    
+    onClose();
   };
 
   return (
@@ -154,33 +125,6 @@ export function GameSettings({ initialSettings, onSave, onClose }: GameSettingsP
               <span 
                 className={`absolute h-4 w-4 rounded-full bg-white top-1 ${
                   sfxEnabled ? 'right-1' : 'left-1'
-                } transition-all duration-200`}
-              ></span>
-            </span>
-          </div>
-        </div>
-        
-        {/* Fullscreen Toggle */}
-        <div className="flex items-center justify-between">
-          <label className="text-white flex items-center">
-            <Maximize className="mr-2" size={18} />
-            Fullscreen
-          </label>
-          <div className="relative inline-block w-12 h-6">
-            <input
-              type="checkbox"
-              className="opacity-0 w-0 h-0"
-              checked={fullscreen}
-              onChange={toggleFullscreen}
-            />
-            <span 
-              className={`absolute cursor-pointer top-0 left-0 right-0 bottom-0 rounded-full ${
-                fullscreen ? 'bg-indigo-600' : 'bg-gray-600'
-              }`}
-            >
-              <span 
-                className={`absolute h-4 w-4 rounded-full bg-white top-1 ${
-                  fullscreen ? 'right-1' : 'left-1'
                 } transition-all duration-200`}
               ></span>
             </span>
