@@ -9,34 +9,26 @@ interface ShareGameProps {
 }
 
 export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps) {
-  const [showDirectMessage, setShowDirectMessage] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showQRCode, setShowQRCode] = useState(false);
-  
-  // Format tweet text
-  const tweetText = `Join me for a game of XShooter! Use room code: ${roomCode} or click the link to join directly. #XShooter #Gaming`;
-  const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}&url=${encodeURIComponent(gameLink)}`;
 
-  // Copy link to clipboard
+  const tweetText = `Join me for a game of XShooter! Use room code: ${roomCode} or click the link to join directly: ${gameLink} #XShooter #Gaming`;
+  const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}`;
+
   const copyToClipboard = () => {
     navigator.clipboard.writeText(gameLink);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Generate QR code URL
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(gameLink)}`;
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
       <h2 className="text-xl font-bold mb-4">Share Game</h2>
-      
       <div className="space-y-6">
-        {/* Room Code */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Room Code
-          </label>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Room Code</label>
           <div className="flex items-center">
             <div className="bg-gray-100 px-4 py-2 rounded-lg font-mono text-lg font-bold tracking-wider flex-grow">
               {roomCode}
@@ -44,12 +36,8 @@ export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps
             <CopyToClipboard text={roomCode} className="ml-2" />
           </div>
         </div>
-        
-        {/* Game Link */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Game Link
-          </label>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Game Link</label>
           <div className="flex rounded-md shadow-sm">
             <input
               type="text"
@@ -67,10 +55,7 @@ export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps
             </button>
           </div>
         </div>
-        
-        {/* Sharing Options */}
         <div className="grid grid-cols-2 gap-4">
-          {/* Share on X */}
           <a
             href={tweetUrl}
             target="_blank"
@@ -80,8 +65,6 @@ export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps
             <Twitter size={16} />
             Share on X
           </a>
-          
-          {/* Invite by Username */}
           <button
             onClick={onInvitePlayer}
             className="inline-flex justify-center items-center gap-2 px-4 py-3 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
@@ -89,8 +72,6 @@ export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps
             <Send size={16} />
             Invite Player
           </button>
-          
-          {/* Generate QR Code */}
           <button
             onClick={() => setShowQRCode(!showQRCode)}
             className="inline-flex justify-center items-center gap-2 px-4 py-3 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
@@ -98,8 +79,6 @@ export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps
             <Share2 size={16} />
             {showQRCode ? 'Hide QR Code' : 'Show QR Code'}
           </button>
-          
-          {/* Copy Join Command */}
           <button
             onClick={() => {
               navigator.clipboard.writeText(`/join ${roomCode}`);
@@ -112,14 +91,12 @@ export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps
             Copy Join Command
           </button>
         </div>
-        
-        {/* QR Code */}
         {showQRCode && (
           <div className="mt-4 flex justify-center">
             <div className="p-4 bg-white border rounded-lg shadow-sm">
-              <img 
-                src={qrCodeUrl} 
-                alt="QR Code for Game Link" 
+              <img
+                src={qrCodeUrl}
+                alt="QR Code for Game Link"
                 className="w-48 h-48"
               />
               <p className="text-center text-sm text-gray-500 mt-2">Scan to join game</p>
