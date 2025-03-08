@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useGameStore } from '../store/gameStore';
-import { Settings as SettingsIcon, Search, Twitter } from 'lucide-react';
-import { GameSettings } from './GameSettings';
 import { supabase } from '../lib/supabase';
 import { MobileControls } from './MobileControls';
 import { AchievementNotification } from './AchievementNotification';
@@ -23,6 +21,28 @@ interface Projectile {
   trail: { x: number; y: number }[];
 }
 
+// AI state for tracking AI behavior
+interface AIState {
+  targetX: number;
+  targetY: number;
+  lastShotTime: number;
+  movementDirection: { x: number, y: number };
+  changeDirCounter: number;
+}
+
+// Player interface used in the game
+interface GamePlayer {
+  id: string;
+  x: number;
+  y: number;
+  health: number;
+  username: string;
+  avatar_url?: string;
+  isAI?: boolean;
+  aiState?: AIState;
+}
+
+// Cache player avatars for rendering
 interface PlayerAvatarCache {
   [playerId: string]: HTMLImageElement | null;
 }
@@ -63,7 +83,11 @@ export function Game() {
     name: string;
     description: string;
   } | null>(null);
-
+  
+  // For tracking time with low health
+  const lowHealthTimeRef = useRef(0);
+  const lastTimeRef = useRef(0);
+  const aiUpdateTimeRef = useRef(0);
   const requestAnimationFrameRef = useRef<number | null>(null);
 
   // Detect mobile device

@@ -6,11 +6,10 @@ interface ShareGameProps {
   gameLink: string;
 }
 
-export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps) {
-  const [showDirectMessage, setShowDirectMessage] = useState(false);
+export function ShareGame({ roomCode, gameLink }: ShareGameProps) {
   const [copied, setCopied] = useState(false);
-  const [showQRCode, setShowQRCode] = useState(false);
-  
+  const [showSuccess, setShowSuccess] = useState(false);
+
   // Format tweet text
   const tweetText = `Join me for a game of XShooter! Use room code: ${roomCode} or click the link to join directly. #XShooter #Gaming`;
   const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}&url=${encodeURIComponent(gameLink)}`;
@@ -21,8 +20,23 @@ export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Generate QR code URL
-  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(gameLink)}`;
+  // Send direct invite (simulated)
+  const sendDirectInvite = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const username = formData.get('username') as string;
+    
+    // Reset form
+    e.currentTarget.reset();
+    
+    // Show success message
+    setShowSuccess(true);
+    setTimeout(() => setShowSuccess(false), 3000);
+    
+    // In a real implementation, you would integrate with X API to send direct messages
+    // For now, this is just a UI demonstration
+    console.log(`Sending invite to: ${username}`);
+  };
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
@@ -56,9 +70,8 @@ export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps
           </div>
         </div>
         
-        {/* Sharing Options */}
-        <div className="grid grid-cols-2 gap-4">
-          {/* Share on X */}
+        {/* Share on X */}
+        <div>
           <a
             href={tweetUrl}
             target="_blank"
@@ -68,49 +81,25 @@ export function ShareGame({ roomCode, gameLink, onInvitePlayer }: ShareGameProps
             <Twitter size={16} />
             Share on X
           </a>
-          
-          {/* Invite by Username */}
-          <button
-            onClick={onInvitePlayer}
-            className="inline-flex justify-center items-center gap-2 px-4 py-3 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-          >
-            <Send size={16} />
-            Invite Player
-          </button>
-          
-          {/* Generate QR Code */}
-          <button
-            onClick={() => setShowQRCode(!showQRCode)}
-            className="inline-flex justify-center items-center gap-2 px-4 py-3 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-          >
-            <Share2 size={16} />
-            {showQRCode ? 'Hide QR Code' : 'Show QR Code'}
-          </button>
-          
-          {/* Copy Join Command */}
-          <button
-            onClick={() => {
-              navigator.clipboard.writeText(`/join ${roomCode}`);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 2000);
-            }}
-            className="inline-flex justify-center items-center gap-2 px-4 py-3 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-          >
-            <ExternalLink size={16} />
-            Copy Join Command
-          </button>
         </div>
         
-        {/* QR Code */}
-        {showQRCode && (
-          <div className="mt-4 flex justify-center">
-            <div className="p-4 bg-white border rounded-lg shadow-sm">
-              <img 
-                src={qrCodeUrl} 
-                alt="QR Code for Game Link" 
-                className="w-48 h-48"
+        {/* Direct Invite */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Invite by X Username
+          </label>
+          <form onSubmit={sendDirectInvite} className="flex mt-1">
+            <div className="flex-grow flex rounded-md shadow-sm">
+              <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 border-gray-300 bg-gray-50 text-gray-500">
+                @
+              </span>
+              <input
+                type="text"
+                name="username"
+                placeholder="username"
+                required
+                className="flex-grow focus:ring-indigo-500 focus:border-indigo-500 block w-full rounded-none rounded-r-md sm:text-sm border-gray-300"
               />
-              <p className="text-center text-sm text-gray-500 mt-2">Scan to join game</p>
             </div>
             <button
               type="submit"
