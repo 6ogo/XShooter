@@ -3,11 +3,12 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useGameStore } from '../store/gameStore';
 import { supabase } from '../lib/supabase';
 import { AchievementNotification } from './AchievementNotification';
+import { Avatar } from './Avatar';
 import { achievementService, GameCompletionData } from '../lib/achievementService';
 
 const CANVAS_WIDTH = 800;
 const CANVAS_HEIGHT = 600;
-const PLAYER_SIZE = 20;
+const PLAYER_SIZE = 20; // Base player size for hitbox
 const PROJECTILE_SIZE = 5;
 const SHOT_COOLDOWN = 3000;
 const MAX_SHOTS = 5;
@@ -26,7 +27,12 @@ interface Player {
   y: number;
   health: number;
   username: string;
-  image?: string; // Twitter profile image URL
+  avatar_url?: string;
+}
+
+// Cache player avatars for rendering
+interface PlayerAvatarCache {
+  [playerId: string]: HTMLImageElement | null;
 }
 
 export function Game() {
@@ -39,6 +45,7 @@ export function Game() {
   const [canShoot, setCanShoot] = useState(true);
   const [gameState, setGameState] = useState<'waiting' | 'playing' | 'finished'>('waiting');
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [playerAvatars, setPlayerAvatars] = useState<PlayerAvatarCache>({});
   const [gameStats, setGameStats] = useState({
     killCount: 0,
     shotsFired: 0,
@@ -61,6 +68,79 @@ export function Game() {
   const lowHealthTimeRef = useRef(0);
   const lastTimeRef = useRef(0);
 
+  // Helper function to create fallback avatar
+  const createFallbackAvatar = (username: string, size: number) => {
+    // Create a canvas to draw the fallback avatar
+    const canvas = document.createElement('canvas');
+    canvas.width = size * 2; // Higher resolution for better quality
+    canvas.height = size * 2;
+    const ctx = canvas.getContext('2d');
+    
+    if (!ctx) return null;
+    
+    // Get initial and color similar to Avatar component
+    const initial = username.charAt(0).toUpperCase();
+    
+    // Colors matching Avatar component
+    const colors = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#6366F1'];
+    const colorIndex = username
+      .split('')
+      .reduce((acc, char) => acc + char.charCodeAt(0), 0) % colors.length;
+    
+    // Draw circle
+    ctx.beginPath();
+    ctx.arc(size, size, size, 0, Math.PI * 2);
+    ctx.fillStyle = colors[colorIndex];
+    ctx.fill();
+    
+    // Draw text
+    ctx.font = `bold ${size}px Arial`;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(initial, size, size);
+    
+    // Create image from canvas
+    const img = new Image();
+    img.src = canvas.toDataURL();
+    return img;
+  };
+
+  // Load player avatar
+  const loadPlayerAvatar = async (player: Player) => {
+    if (playerAvatars[player.id]) return playerAvatars[player.id];
+    
+    // If player has an avatar URL, load it
+    if (player.avatar_url) {
+      try {
+        const img = new Image();
+        img.crossOrigin = 'anonymous'; // Handle CORS
+        
+        // Create a promise to wait for image loading
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = () => {
+            // On error, use fallback
+            playerAvatars[player.id] = createFallbackAvatar(player.username, PLAYER_SIZE);
+            resolve(null);
+          };
+          img.src = player.avatar_url || '';
+        });
+        
+        // Successfully loaded
+        playerAvatars[player.id] = img;
+        return img;
+      } catch (err) {
+        console.error('Error loading avatar:', err);
+      }
+    }
+    
+    // Use fallback for no avatar or loading error
+    const fallbackAvatar = createFallbackAvatar(player.username, PLAYER_SIZE);
+    playerAvatars[player.id] = fallbackAvatar;
+    return fallbackAvatar;
+  };
+
   useEffect(() => {
     // Check if user is authenticated
     const checkAuth = async () => {
@@ -80,6 +160,9 @@ export function Game() {
         .single();
         
       if (profile) {
+        // Get avatar URL from user metadata
+        const avatar_url = user.user_metadata?.avatar_url || null;
+        
         // Random starting position
         const x = Math.random() * (CANVAS_WIDTH - PLAYER_SIZE * 2) + PLAYER_SIZE;
         const y = Math.random() * (CANVAS_HEIGHT - PLAYER_SIZE * 2) + PLAYER_SIZE;
@@ -88,7 +171,8 @@ export function Game() {
           x,
           y,
           health: 100,
-          username: profile.username
+          username: profile.username,
+          avatar_url
         });
         
         // Add player to game_players table
@@ -133,6 +217,26 @@ export function Game() {
     };
   }, [id, navigate, updatePlayer, removePlayer, players.size]);
 
+  // Preload player avatars when player data changes
+  useEffect(() => {
+    const loadAvatars = async () => {
+      const newCache: PlayerAvatarCache = { ...playerAvatars };
+      
+      for (const [playerId, player] of players.entries()) {
+        if (!newCache[playerId]) {
+          const avatar = await loadPlayerAvatar(player);
+          if (avatar) {
+            newCache[playerId] = avatar;
+          }
+        }
+      }
+      
+      setPlayerAvatars(newCache);
+    };
+    
+    loadAvatars();
+  }, [players]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !currentUserId) return;
@@ -148,20 +252,52 @@ export function Game() {
       lastFrameTime = currentTime;
       
       // Update low health time tracking
-      if (players.get(currentUserId)?.health <= 20) {
+      const currentPlayer = players.get(currentUserId);
+      if (currentPlayer && currentPlayer.health <= 20) {
         lowHealthTimeRef.current += deltaTime / 1000; // Convert to seconds
       }
       
       ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
       // Draw players
-      players.forEach((player) => {
+      players.forEach(async (player) => {
         if (player.health <= 0) return;
 
-        ctx.fillStyle = player.id === currentUserId ? '#4CAF50' : '#F44336';
-        ctx.beginPath();
-        ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
-        ctx.fill();
+        // Get player avatar (from cache or load it)
+        const avatar = playerAvatars[player.id];
+        
+        // Draw player as avatar or circle if avatar not loaded yet
+        if (avatar) {
+          // Draw avatar as circle with clipping
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
+          ctx.clip();
+          
+          // Draw the image centered on the player position
+          ctx.drawImage(
+            avatar, 
+            player.x - PLAYER_SIZE, 
+            player.y - PLAYER_SIZE,
+            PLAYER_SIZE * 2,
+            PLAYER_SIZE * 2
+          );
+          
+          // If this is the current player, add a highlight
+          if (player.id === currentUserId) {
+            ctx.strokeStyle = '#4CAF50';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+          }
+          
+          ctx.restore();
+        } else {
+          // Fallback to colored circle
+          ctx.fillStyle = player.id === currentUserId ? '#4CAF50' : '#F44336';
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
+          ctx.fill();
+        }
 
         // Draw health bar
         ctx.fillStyle = '#FF0000';
@@ -175,9 +311,12 @@ export function Game() {
         );
 
         // Draw username
-        ctx.fillStyle = '#000';
+        ctx.fillStyle = '#FFFFFF';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 2;
         ctx.font = '12px Arial';
         ctx.textAlign = 'center';
+        ctx.strokeText(player.username, player.x, player.y - 35);
         ctx.fillText(player.username, player.x, player.y - 35);
       });
 
@@ -317,7 +456,7 @@ export function Game() {
 
     draw(performance.now());
     return () => cancelAnimationFrame(animationId);
-  }, [players, projectiles, currentUserId, gameState, updatePlayer]);
+  }, [players, projectiles, currentUserId, gameState, updatePlayer, playerAvatars]);
 
   const handleGameEnd = async (isWinner: boolean) => {
     setGameState('finished');
@@ -495,7 +634,7 @@ export function Game() {
           width={CANVAS_WIDTH}
           height={CANVAS_HEIGHT}
           onClick={handleShoot}
-          className="bg-white rounded-lg shadow-lg"
+          className="bg-gray-800 rounded-lg shadow-lg"
         />
         
         <div className="absolute top-4 right-4 bg-black bg-opacity-50 text-white p-2 rounded">
@@ -508,9 +647,26 @@ export function Game() {
             <h2 className="text-3xl font-bold text-white mb-4">
               Game Over
             </h2>
+            
+            {/* Winner display with avatar */}
+            {Array.from(players.values()).find(p => p.health > 0) && (
+              <div className="mb-6">
+                <div className="flex flex-col items-center">
+                  <Avatar 
+                    username={Array.from(players.values()).find(p => p.health > 0)?.username || 'Winner'} 
+                    imageUrl={Array.from(players.values()).find(p => p.health > 0)?.avatar_url}
+                    size="lg"
+                    className="mb-2"
+                  />
+                  <p className="text-xl text-white">Winner: {Array.from(players.values()).find(p => p.health > 0)?.username}</p>
+                </div>
+              </div>
+            )}
+            
             <p className="text-xl text-white mb-6">
-              {players.get(currentUserId)?.health > 0 ? 'You Won!' : 'Better luck next time!'}
+              {currentUserId && players.get(currentUserId) && players.get(currentUserId)!.health > 0 ? 'You Won!' : 'Better luck next time!'}
             </p>
+            
             <div className="grid grid-cols-2 gap-6 mb-8">
               <div className="text-center">
                 <p className="text-gray-400">Kills</p>
@@ -525,6 +681,7 @@ export function Game() {
                 </p>
               </div>
             </div>
+            
             <button
               onClick={handleReturnToLobby}
               className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"

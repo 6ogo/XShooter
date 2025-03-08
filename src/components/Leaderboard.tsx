@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
 interface LeaderboardEntry {
@@ -10,7 +10,7 @@ interface LeaderboardEntry {
 
 export function Leaderboard() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
-  const [userRank, setUserRank] = useState<LeaderboardEntry | null>(null);
+  const [userRank] = useState<LeaderboardEntry | null>(null);
 
   useEffect(() => {
     const fetchLeaderboard = async () => {

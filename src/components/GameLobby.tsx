@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useGameStore } from '../store/gameStore';
@@ -7,7 +7,7 @@ import { Users, Swords, Trophy, Award } from 'lucide-react';
 export function GameLobby() {
   const navigate = useNavigate();
   const { setGameId, setRoomCode } = useGameStore();
-  const [activeGames, setActiveGames] = useState([]);
+  const [activeGames, setActiveGames] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [userData, setUserData] = useState<any>(null);
