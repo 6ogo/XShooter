@@ -3,7 +3,8 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { Game } from './components/Game';
 import { Leaderboard } from './components/Leaderboard';
 import { Auth } from './components/Auth';
-import { GameLobby } from './components/GameLobby.tsx';
+import { GameLobby } from './components/GameLobby';
+import { Achievements } from './components/Achievements';
 import { useGameStore } from './store/gameStore';
 
 function App() {
@@ -17,6 +18,7 @@ function App() {
           <Route path="/game/lobby" element={<GameLobby />} />
           <Route path="/game/:id" element={<Game />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
+          <Route path="/achievements" element={<Achievements />} />
         </Routes>
       </div>
     </Router>
