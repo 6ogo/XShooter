@@ -1,13 +1,19 @@
-// src/components/GameLobby.tsx
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useGameStore } from '../store/gameStore';
-import { Users, Swords, Trophy, Award, User } from 'lucide-react';
+import { Trophy, Award, Twitter } from 'lucide-react';
 import { Layout } from './Layout';
 
-export function GameLobby({}: GameLobbyProps) {
-  const navigate = useNavigate();
+interface UserData {
+  id: string;
+  username: string;
+  email?: string;
+}
+
+interface GameLobbyProps {}
+
+export function GameLobby(_props: GameLobbyProps) {
   const [roomCode, setRoomCodeState] = useState<string>('');
   const gameLink = `${window.location.origin}/game/${roomCode}`;
   const { setGameId, setRoomCode, setIsHost } = useGameStore();
@@ -19,6 +25,8 @@ export function GameLobby({}: GameLobbyProps) {
   const [error, setError] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [twitterHandle, setTwitterHandle] = useState<string | null>(null);
+  const [userData, setUserData] = useState<UserData | null>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     const fetchUserData = async () => {
@@ -30,18 +38,22 @@ export function GameLobby({}: GameLobbyProps) {
             .select('username')
             .eq('id', user.id)
             .single();
-            
+
           if (data) {
-            setUserData({ ...user, username: data.username });
+            setUserData({ id: user.id, username: data.username, email: user.email });
           }
+          setCurrentUser(user);
+          setTwitterHandle(user.user_metadata?.preferred_username || user.user_metadata?.user_name || null);
         } else {
           navigate('/');
         }
       } catch (err) {
         console.error('Error fetching user data:', err);
+      } finally {
+        setLoading(false);
       }
     };
-    
+
     fetchUserData();
   }, [navigate]);
 
@@ -52,85 +64,21 @@ export function GameLobby({}: GameLobbyProps) {
         .select('*, profiles!games_host_id_fkey(username)')
         .eq('status', 'waiting');
 
-      if (!error && games) {
-        setActiveGames(games);
-      }
+      if (!error && games) setActiveGames(games);
       setLoading(false);
     };
 
     fetchGames();
 
-    // Subscribe to game updates
     const gameSubscription = supabase
       .channel('games')
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'games'
-      }, () => {
-        fetchGames();
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'games' }, fetchGames)
       .subscribe();
 
     return () => {
       gameSubscription.unsubscribe();
     };
   }, []);
-
-  const createGame = async () => {
-    try {
-      setError(null);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        navigate('/');
-        return;
-      }
-      setCurrentUser(user);
-      setTwitterHandle(user.user_metadata?.preferred_username || user.user_metadata?.user_name || null);
-
-      // First, check if profile exists
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('username')
-        .eq('id', user.id)
-        .single();
-
-      // If profile doesn't exist, create one
-      if (profileError || !profile) {
-        const username = user.email?.split('@')[0] || `player_${Math.random().toString(36).substring(2, 10)}`;
-        
-        // Create profile
-        const { error: newProfileError } = await supabase
-          .from('profiles')
-          .insert([{ 
-            id: user.id, 
-            username 
-          }]);
-          
-        if (newProfileError) {
-          throw new Error('Failed to create profile. Please try again.');
-        }
-        
-        // Create leaderboard entry
-        const { error: leaderboardError } = await supabase
-          .from('leaderboard')
-          .insert([{ 
-            player_id: user.id,
-            wins: 0,
-            total_kills: 0,
-            total_shots: 0,
-            shots_hit: 0,
-            games_played: 0
-          }]);
-          
-        if (leaderboardError) {
-          throw new Error('Failed to initialize leaderboard. Please try again.');
-        }
-      }
-      setLoading(false);
-    };
-    checkAuth();
-  }, [navigate, updatePlayer]);
 
   const createGame = async () => {
     if (!currentUser) return;
@@ -166,7 +114,8 @@ export function GameLobby({}: GameLobbyProps) {
         });
 
       setGameId(game.id);
-      setRoomCodeState(roomCode);
+      setRoomCodeState(generatedRoomCode);
+      setRoomCode(generatedRoomCode);
       setIsHost(true);
       navigate(`/game/${game.id}`);
     } catch (err) {
@@ -275,7 +224,7 @@ export function GameLobby({}: GameLobbyProps) {
         .eq('id', game.id);
 
       setGameId(game.id);
-      setRoomCode(game.room_code);
+      setRoomCode(game.room_code || null);
       setIsHost(game.host_id === currentUser.id);
       navigate(`/game/${game.id}`);
     } catch (err) {
@@ -287,9 +236,14 @@ export function GameLobby({}: GameLobbyProps) {
 
   const startSingleplayer = () => {
     setGameId('singleplayer');
-    setRoomCode(null); // This is fine since setRoomCode accepts string | null
+    setRoomCode('');
     setIsHost(true);
     navigate('/game/singleplayer');
+  };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    navigate('/');
   };
 
   if (loading) {
@@ -304,13 +258,12 @@ export function GameLobby({}: GameLobbyProps) {
     <Layout>
       <div className="p-6">
         <div className="max-w-4xl mx-auto">
-          {/* Header with username and sign out */}
           {userData && (
             <div className="flex justify-between items-center mb-6 text-white">
               <div className="text-sm">
                 Playing as <span className="font-medium">{userData.username}</span>
               </div>
-              <button 
+              <button
                 onClick={handleSignOut}
                 className="text-sm text-gray-400 hover:text-white"
               >
@@ -318,7 +271,6 @@ export function GameLobby({}: GameLobbyProps) {
               </button>
             </div>
           )}
-          
           <div className="flex justify-between items-center mb-8">
             <h1 className="text-3xl font-bold text-white">Game Lobby</h1>
             <div className="flex gap-4">
@@ -338,13 +290,11 @@ export function GameLobby({}: GameLobbyProps) {
               </button>
             </div>
           </div>
-
           {error && (
             <div className="mb-6 p-4 bg-red-600 text-white rounded-lg">
               {error}
             </div>
           )}
-
           <div className="bg-gray-800 rounded-lg shadow-xl p-6 mb-6">
             <h2 className="text-2xl font-bold text-white mb-4">Welcome to XShooter</h2>
             {twitterHandle && (
@@ -394,6 +344,6 @@ export function GameLobby({}: GameLobbyProps) {
           </div>
         </div>
       </div>
-    </div>
+    </Layout>
   );
 }
