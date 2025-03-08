@@ -20,7 +20,7 @@ export function Auth() {
         navigate('/game/lobby');
       }
     };
-    
+
     checkUser();
   }, [navigate]);
 
@@ -28,22 +28,22 @@ export function Auth() {
   const handleXAuth = async () => {
     setLoading(true);
     setError(null);
-    
+
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'twitter',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`
+          redirectTo: window.location.origin + '/auth/callback'
         }
       });
-      
+
       if (error) throw error;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to authenticate with X');
       setLoading(false);
     }
   };
-
+  
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -73,9 +73,9 @@ export function Auth() {
         // Create profile
         const { error: profileError } = await supabase
           .from('profiles')
-          .insert([{ 
-            id: user.id, 
-            username 
+          .insert([{
+            id: user.id,
+            username
           }])
           .select()
           .single();
@@ -85,7 +85,7 @@ export function Auth() {
         // Create leaderboard entry
         const { error: leaderboardError } = await supabase
           .from('leaderboard')
-          .insert([{ 
+          .insert([{
             player_id: user.id,
             wins: 0,
             total_kills: 0,
@@ -107,7 +107,7 @@ export function Auth() {
         });
 
         if (signInError) throw signInError;
-        
+
         // Redirect to game lobby after successful login
         navigate('/game/lobby');
       }
