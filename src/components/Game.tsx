@@ -8,6 +8,7 @@ import { achievementService, GameCompletionData } from '../lib/achievementServic
 import { MobileControls } from './MobileControls';
 import { Share2, RefreshCw, LogOut, HelpCircle, X, Check, ChevronRight, Settings as SettingsIcon } from 'lucide-react';
 import { ShareGame } from './ShareGame';
+import { GameSettings } from './GameSettings';
 
 // Game constants - moved to the top for easier configuration
 const CANVAS_WIDTH = 800;
@@ -138,6 +139,7 @@ export function Game() {
   const [showShareDialog, setShowShareDialog] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [tutorialStep, setTutorialStep] = useState(0);
+  const [showSettings, setShowSettings] = useState(false);
   const [gameSettings, setGameSettings] = useState<GameSettings>({
     volume: 70,
     graphicsQuality: 'medium',
@@ -341,12 +343,18 @@ export function Game() {
   }, [id]);
 
   // Player movement based on keyboard input
+  // Player movement based on keyboard input
   useEffect(() => {
     if (!currentUserId) return;
 
+    // Create a reference to track if this effect's interval is active
+    const isActive = { current: true };
+
     const handleMovement = () => {
+      if (!isActive.current) return;
+
       const currentPlayer = players.get(currentUserId);
-      if (!currentPlayer || currentPlayer.health <= 0) return;
+      if (!currentPlayer || currentPlayer.health <= 0 || showTutorial) return;
 
       const moveSpeed = PLAYER_MOVEMENT_SPEED;
       let dx = 0, dy = 0;
@@ -403,202 +411,24 @@ export function Game() {
       }
     };
 
-    const movementInterval = setInterval(handleMovement, 16);
-    return () => clearInterval(movementInterval);
-  }, [keys, currentUserId, players, updatePlayer, gameSettings.controlType]);
+    // Use requestAnimationFrame for smoother movement
+    let animationFrameId: number;
 
-// Initialize the game and authentication
-useEffect(() => {
-  const checkAuth = async () => {
-    try {
-      if (id === 'singleplayer') {
-        console.log("Initializing singleplayer mode");
-        const playerId = 'player_' + Math.random().toString(36).substring(2, 9);
-        console.log("Generated player ID:", playerId);
-        setCurrentUserId(playerId);
-      
-        // Position player in the center of the canvas
-        const x = CANVAS_WIDTH / 2;
-        const y = CANVAS_HEIGHT / 2;
-
-        // Add the player with proper initial position
-        updatePlayer(playerId, {
-          id: playerId,
-          x,
-          y,
-          health: 100,
-          username: 'You'
-        });
-
-        // Initialize AI opponents with a slight delay to ensure player is set first
-        setTimeout(() => {
-          console.log("Setting up AI opponents and starting game");
-          initializeAIOpponents(AI_BOT_COUNT);
-          setGameState('playing');
-          addNotification("Welcome to Singleplayer Mode!", "#4CAF50", 3000);
-          console.log("Game state should now be:", 'playing');
-        }, 100);
-      
-        return;
-      }
-      
-      // Multiplayer code
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        navigate('/');
-        return;
-      }
-      
-      console.log("User authenticated:", user.id);
-      setCurrentUserId(user.id);
-      
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('username')
-        .eq('id', user.id)
-        .single();
-        
-      if (profile) {
-        const avatar_url = user.user_metadata?.avatar_url || null;
-        
-        // Random starting position for player
-        const x = Math.random() * (CANVAS_WIDTH - PLAYER_SIZE * 2) + PLAYER_SIZE;
-        const y = Math.random() * (CANVAS_HEIGHT - PLAYER_SIZE * 2) + PLAYER_SIZE;
-        
-        // Update local player state
-        updatePlayer(user.id, { 
-          x, 
-          y, 
-          health: 100, 
-          username: profile.username, 
-          avatar_url 
-        });
-        
-        // If we have a valid game ID (not singleplayer)
-        if (id && id !== 'singleplayer') {
-          console.log("Joining multiplayer game:", id);
-          
-          // Add player to the game in database
-          await supabase
-            .from('game_players')
-            .insert({ 
-              game_id: id, 
-              player_id: user.id, 
-              position_x: x, 
-              position_y: y 
-            });
-            
-          // Update player count
-          await supabase
-            .from('games')
-            .update({ current_players: players.size + 1 })
-            .eq('id', id);
-            
-          // Check if you're the host
-          const { data: game } = await supabase
-            .from('games')
-            .select('host_id, room_code')
-            .eq('id', id)
-            .single();
-            
-          if (game) {
-            // Store room code in state if available
-            if (game.room_code) {
-              console.log("Setting room code:", game.room_code);
-              setRoomCode(game.room_code);
-            }
-            
-            if (game.host_id === user.id) {
-              // Set host status
-              setIsHost(true);
-              
-              // Show share link for host
-              addNotification("Share the game link with friends to play together!", "#3498db", 5000);
-              setTimeout(() => setShowShareLink(true), 1000);
-            } else {
-              // Welcome message for non-host
-              addNotification("Welcome to the game! Get ready to play!", "#4CAF50", 3000);
-            }
-          }
-        }
-      }
-      
-      // Set initial game state to waiting
-      console.log("Setting game state to waiting");
-      setGameState('waiting');
-      
-    } catch (error) {
-      console.error("Auth check error:", error);
-      addNotification("Error connecting to game server", "#e74c3c", 5000);
-    }
-  };
-
-  checkAuth();
-  
-  // Set up real-time subscriptions for multiplayer
-  if (!isSingleplayer && id && id !== 'singleplayer') {
-    console.log("Setting up realtime subscriptions for game:", id);
-    
-    const gameSubscription = supabase
-      .channel(`game:${id}`)
-      .on('presence', { event: 'sync' }, () => {
-        console.log("Presence sync event");
-      })
-      .on('presence', { event: 'join' }, () => {
-        console.log("Player joined");
-        addNotification("A player has joined the game!", "#3498db", 3000);
-      })
-      .on('presence', { event: 'leave' }, ({ leftPresences }) => {
-        console.log("Player left:", leftPresences);
-        // Handle player leaving (you'll need to complete this part)
-        leftPresences.forEach(presence => {
-          if (presence.user_id) {
-            removePlayer(presence.user_id);
-          }
-        });
-      })
-      .subscribe();
-      
-    // Listen for game updates
-    const gamePlayerSubscription = supabase
-      .channel(`game_players:${id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'game_players', filter: `game_id=eq.${id}` },
-        (payload) => {
-          console.log("New player joined:", payload);
-          const { player_id, position_x, position_y } = payload.new;
-          
-          // Fetch player profile
-          supabase
-            .from('profiles')
-            .select('username')
-            .eq('id', player_id)
-            .single()
-            .then(({ data }) => {
-              if (data) {
-                // Add new player to the game state
-                updatePlayer(player_id, {
-                  id: player_id,
-                  x: position_x,
-                  y: position_y,
-                  health: 100,
-                  username: data.username
-                });
-              }
-            });
-        }
-      )
-      .subscribe();
-      
-    // Return cleanup function
-    return () => {
-      gameSubscription.unsubscribe();
-      gamePlayerSubscription.unsubscribe();
+    const animateMovement = () => {
+      if (!isActive.current) return;
+      handleMovement();
+      animationFrameId = requestAnimationFrame(animateMovement);
     };
-  }
-  
-}, [id, navigate, updatePlayer, removePlayer, players, isSingleplayer, setIsHost, setRoomCode]);
+
+    // Start animation
+    animationFrameId = requestAnimationFrame(animateMovement);
+
+    // Clean up
+    return () => {
+      isActive.current = false;
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [keys, currentUserId, players, updatePlayer, gameSettings.controlType, showTutorial]);
 
   // Notification system
   const addNotification = useCallback((text: string, color: string, duration: number) => {
@@ -612,6 +442,222 @@ useEffect(() => {
       }
     ]);
   }, []);
+
+  // Initialize the game and authentication
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        if (id === 'singleplayer') {
+          console.log("Initializing singleplayer mode");
+
+          // Only initialize singleplayer mode if we don't already have a current user ID set
+          if (!currentUserId) {
+            const playerId = 'player_' + Math.random().toString(36).substring(2, 9);
+            console.log("Generated player ID:", playerId);
+            setCurrentUserId(playerId);
+
+            // Position player in the center of the canvas
+            const x = CANVAS_WIDTH / 2;
+            const y = CANVAS_HEIGHT / 2;
+
+            // Add the player with proper initial position
+            updatePlayer(currentUserId || playerId, {
+              id: currentUserId || playerId,
+              x,
+              y,
+              health: 100,
+              username: 'You'
+            });
+
+            // Initialize AI opponents with a slight delay to ensure player is set first
+            setTimeout(() => {
+              console.log("Setting up AI opponents and starting game");
+              initializeAIOpponents(AI_BOT_COUNT);
+              setGameState('playing');
+              addNotification("Welcome to Singleplayer Mode!", "#4CAF50", 3000);
+              console.log("Game state should now be:", 'playing');
+            }, 100);
+          }
+
+          return;
+        }
+
+        // For multiplayer games, check if we already have a currentUserId to prevent duplicate initialization
+        if (currentUserId && id !== 'singleplayer' && players.size > 0) {
+          console.log("Game already initialized, skipping re-initialization");
+          return;
+        }
+
+        // Multiplayer code
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          navigate('/');
+          return;
+        }
+
+        console.log("User authenticated:", user.id);
+        setCurrentUserId(user.id);
+
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('username')
+          .eq('id', user.id)
+          .single();
+
+        if (profile) {
+          const avatar_url = user.user_metadata?.avatar_url || null;
+
+          // Only update player position if not already set
+          const existingPlayer = players.get(user.id);
+
+          // Random starting position for player or use existing position
+          const x = existingPlayer ? existingPlayer.x : Math.random() * (CANVAS_WIDTH - PLAYER_SIZE * 2) + PLAYER_SIZE;
+          const y = existingPlayer ? existingPlayer.y : Math.random() * (CANVAS_HEIGHT - PLAYER_SIZE * 2) + PLAYER_SIZE;
+
+          // Update local player state but preserve position if already set
+          updatePlayer(user.id, {
+            x,
+            y,
+            health: existingPlayer ? existingPlayer.health : 100,
+            username: profile.username,
+            avatar_url
+          });
+
+          // If we have a valid game ID (not singleplayer) and we're not already in a game
+          if (id && id !== 'singleplayer' && !existingPlayer) {
+            console.log("Joining multiplayer game:", id);
+
+            // Add player to the game in database
+            await supabase
+              .from('game_players')
+              .upsert({
+                game_id: id,
+                player_id: user.id,
+                position_x: x,
+                position_y: y
+              }, { onConflict: 'game_id,player_id' });
+
+            // Update player count
+            await supabase
+              .from('games')
+              .update({ current_players: players.size + 1 })
+              .eq('id', id);
+
+            // Check if you're the host
+            const { data: game } = await supabase
+              .from('games')
+              .select('host_id, room_code')
+              .eq('id', id)
+              .single();
+
+            if (game) {
+              // Store room code in state if available
+              if (game.room_code) {
+                console.log("Setting room code:", game.room_code);
+                setRoomCode(game.room_code);
+              }
+
+              if (game.host_id === user.id) {
+                // Set host status
+                setIsHost(true);
+
+                // Show share link for host
+                addNotification("Share the game link with friends to play together!", "#3498db", 5000);
+                setTimeout(() => setShowShareLink(true), 1000);
+              } else if (!existingPlayer) {
+                // Welcome message for non-host
+                addNotification("Welcome to the game! Get ready to play!", "#4CAF50", 3000);
+              }
+            }
+          }
+        }
+
+        // Set initial game state to waiting
+        if (gameState === 'loading') {
+          console.log("Setting game state to waiting");
+          setGameState('waiting');
+        }
+
+      } catch (error) {
+        console.error("Auth check error:", error);
+        addNotification("Error connecting to game server", "#e74c3c", 5000);
+      }
+    };
+
+    checkAuth();
+
+    // Set up real-time subscriptions for multiplayer
+    // Only set up subscriptions if we don't already have them for this game
+    let gameSubscription: any = null;
+    let gamePlayerSubscription: any = null;
+
+    if (!isSingleplayer && id && id !== 'singleplayer') {
+      console.log("Setting up realtime subscriptions for game:", id);
+
+      gameSubscription = supabase
+        .channel(`game:${id}`)
+        .on('presence', { event: 'sync' }, () => {
+          console.log("Presence sync event");
+        })
+        .on('presence', { event: 'join' }, () => {
+          console.log("Player joined");
+          addNotification("A player has joined the game!", "#3498db", 3000);
+        })
+        .on('presence', { event: 'leave' }, ({ leftPresences }) => {
+          console.log("Player left:", leftPresences);
+          // Handle player leaving (you'll need to complete this part)
+          leftPresences.forEach(presence => {
+            if (presence.user_id) {
+              removePlayer(presence.user_id);
+            }
+          });
+        })
+        .subscribe();
+
+      // Listen for game updates
+      gamePlayerSubscription = supabase
+        .channel(`game_players:${id}`)
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'game_players', filter: `game_id=eq.${id}` },
+          (payload) => {
+            console.log("New player joined:", payload);
+            const { player_id, position_x, position_y } = payload.new;
+
+            // Fetch player profile
+            supabase
+              .from('profiles')
+              .select('username')
+              .eq('id', player_id)
+              .single()
+              .then(({ data }) => {
+                if (data) {
+                  // Add new player to the game state
+                  updatePlayer(player_id, {
+                    id: player_id,
+                    x: position_x,
+                    y: position_y,
+                    health: 100,
+                    username: data.username
+                  });
+                }
+              });
+          }
+        )
+        .subscribe();
+    }
+
+    // Return cleanup function
+    return () => {
+      if (gameSubscription) {
+        gameSubscription.unsubscribe();
+      }
+      if (gamePlayerSubscription) {
+        gamePlayerSubscription.unsubscribe();
+      }
+    };
+
+  }, [id, navigate, updatePlayer, removePlayer, players, isSingleplayer, setIsHost, setRoomCode, gameState, currentUserId, addNotification]);
 
   // Initialize AI opponents with different personalities for more dynamic gameplay
   const initializeAIOpponents = useCallback((count: number) => {
@@ -2281,17 +2327,17 @@ useEffect(() => {
             <span>Exit Game</span>
           </button>
         </div>
-        
+
         <div className="flex items-center gap-3">
           {/* Settings Button */}
           <button
-            onClick={() => alert("Settings functionality to be implemented")}
+            onClick={() => setShowSettings(true)}
             className="bg-gray-700 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg hover:bg-gray-600 transition-colors"
           >
             <SettingsIcon size={18} />
             <span>Settings</span>
           </button>
-          
+
           {/* Share Game Button (only for hosts in waiting state) */}
           {showShareLink && !isSingleplayer && (
             <button
@@ -2304,7 +2350,7 @@ useEffect(() => {
           )}
         </div>
       </div>
-      
+
       <div className="relative">
         <canvas
           ref={canvasRef}
@@ -2313,7 +2359,7 @@ useEffect(() => {
           onClick={handleShoot}
           className="bg-gray-800 rounded-lg shadow-2xl border border-gray-700"
         />
-  
+
         {/* Game Info Overlay */}
         <div className="absolute top-4 right-4 bg-black bg-opacity-50 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg">
           <div className="w-2 h-2 rounded-full bg-green-500"></div>
@@ -2321,7 +2367,7 @@ useEffect(() => {
             {isSingleplayer ? 'Singleplayer' : `${Array.from(players.values()).filter(p => p.health > 0).length} Players`}
           </span>
         </div>
-  
+
         {/* Help Button */}
         <button
           onClick={() => setShowTutorial(true)}
@@ -2330,7 +2376,7 @@ useEffect(() => {
         >
           <HelpCircle size={20} />
         </button>
-  
+
         {/* Share Game Modal */}
         {showShareDialog && !isSingleplayer && (
           <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
@@ -2343,7 +2389,7 @@ useEffect(() => {
             </div>
           </div>
         )}
-  
+
         {/* Game Over Overlay */}
         {gameState === 'finished' && (
           <div className="absolute inset-0 bg-black bg-opacity-70 flex flex-col items-center justify-center rounded-lg">
@@ -2366,7 +2412,7 @@ useEffect(() => {
             <p className="text-xl text-white mb-6">
               {currentUserId && players.get(currentUserId) && players.get(currentUserId)!.health > 0 ? 'You Won!' : 'Better luck next time!'}
             </p>
-  
+
             <div className="bg-gray-800 p-4 rounded-lg mb-8 w-64 shadow-lg">
               <h3 className="text-white text-center mb-4 font-semibold">Your Stats</h3>
               <div className="grid grid-cols-2 gap-4">
@@ -2390,7 +2436,7 @@ useEffect(() => {
                 </div>
               </div>
             </div>
-  
+
             <div className="flex gap-4">
               <button
                 onClick={handleRestart}
@@ -2411,7 +2457,7 @@ useEffect(() => {
             </div>
           </div>
         )}
-  
+
         {/* Tutorial Overlay */}
         {showTutorial && (
           <div className="absolute inset-0 bg-black bg-opacity-80 flex items-center justify-center rounded-lg">
@@ -2425,9 +2471,9 @@ useEffect(() => {
                   <X size={20} />
                 </button>
               </div>
-  
+
               <p className="text-gray-300 mb-6">{tutorialSteps[tutorialStep].content}</p>
-  
+
               <div className="flex justify-between">
                 <button
                   onClick={() => setTutorialStep(Math.max(0, tutorialStep - 1))}
@@ -2439,7 +2485,7 @@ useEffect(() => {
                 >
                   Previous
                 </button>
-  
+
                 {tutorialStep < tutorialSteps.length - 1 ? (
                   <button
                     onClick={() => setTutorialStep(tutorialStep + 1)}
@@ -2459,11 +2505,19 @@ useEffect(() => {
             </div>
           </div>
         )}
+        {/* Game Settings Modal */}
+        {showSettings && (
+          <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
+            <div className="max-w-md w-full">
+              <GameSettings onClose={() => setShowSettings(false)} />
+            </div>
+          </div>
+        )}
       </div>
-  
+
       {/* Mobile Controls */}
       {isMobile && !showTutorial && <MobileControls onMove={handleMobileMove} onShoot={handleMobileShoot} />}
-  
+
       {/* Achievement Notification */}
       <AchievementNotification achievement={unlockingAchievement} onClose={() => setUnlockingAchievement(null)} />
     </div>
