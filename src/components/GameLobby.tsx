@@ -81,16 +81,21 @@ export function GameLobby() {
     // Clean up any old or empty games when the lobby loads
     cleanupEmptyGames();
 
-  // Set up a recurring cleanup every 90s
-  const cleanupInterval = setInterval(() => {
-    cleanupEmptyGames();
-  }, 90000); // 90 seconds
+    // Set up a recurring cleanup every 90s
+    const cleanupInterval = setInterval(() => {
+      cleanupEmptyGames();
+    }, 90000); // 90 seconds
 
     const fetchGames = async () => {
+      // Calculate a timestamp for 2 hours ago to filter out old games
+      const twoHoursAgo = new Date();
+      twoHoursAgo.setHours(twoHoursAgo.getHours() - 2);
+
       const { data: games, error } = await supabase
         .from('games')
         .select('*, profiles!games_host_id_fkey(username)')
         .eq('status', 'waiting')
+        .gt('created_at', twoHoursAgo.toISOString()) // Only show games created in the last 2 hours
         .order('created_at', { ascending: false });
 
       if (!error && games) {
@@ -98,6 +103,7 @@ export function GameLobby() {
       }
       setLoading(false);
     };
+
 
     fetchGames();
 

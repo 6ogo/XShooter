@@ -321,16 +321,31 @@ export function Game() {
       }
 
       if (dx !== 0 || dy !== 0) {
-        const newX = Math.max(PLAYER_SIZE, Math.min(CANVAS_WIDTH - PLAYER_SIZE, currentPlayer.x + dx));
-        const newY = Math.max(PLAYER_SIZE, Math.min(CANVAS_HEIGHT - PLAYER_SIZE, currentPlayer.y + dy));
+        // Calculate new position with boundary constraints
+        // Use strict boundary checks to prevent any possibility of going out of bounds
+        const minX = PLAYER_SIZE + 1; // Add 1px buffer
+        const maxX = CANVAS_WIDTH - PLAYER_SIZE - 1;
+        const minY = PLAYER_SIZE + 1;
+        const maxY = CANVAS_HEIGHT - PLAYER_SIZE - 1;
 
-        // Update player position and store velocity for visual effects
-        updatePlayer(currentUserId, {
-          x: newX,
-          y: newY,
-          lastMoveTime: performance.now(),
-          velocity: { x: dx, y: dy }
-        });
+        // Calculate proposed new position
+        const newX = currentPlayer.x + dx;
+        const newY = currentPlayer.y + dy;
+
+        // Enforce strict boundary constraints
+        const boundedX = Math.max(minX, Math.min(maxX, newX));
+        const boundedY = Math.max(minY, Math.min(maxY, newY));
+
+        // Only update if position has actually changed
+        if (boundedX !== currentPlayer.x || boundedY !== currentPlayer.y) {
+          // Update player position and store velocity for visual effects
+          updatePlayer(currentUserId, {
+            x: boundedX,
+            y: boundedY,
+            lastMoveTime: performance.now(),
+            velocity: { x: dx, y: dy }
+          });
+        }
       } else if (currentPlayer.velocity && (currentPlayer.velocity.x !== 0 || currentPlayer.velocity.y !== 0)) {
         // Reset velocity when stopped
         updatePlayer(currentUserId, { velocity: { x: 0, y: 0 } });
@@ -346,68 +361,34 @@ export function Game() {
     const checkAuth = async () => {
       try {
         if (id === 'singleplayer') {
+          // Generate a consistent player ID for singleplayer
           const playerId = 'player_' + Math.random().toString(36).substring(2, 9);
           setCurrentUserId(playerId);
-          const x = Math.random() * (CANVAS_WIDTH - PLAYER_SIZE * 2) + PLAYER_SIZE;
-          const y = Math.random() * (CANVAS_HEIGHT - PLAYER_SIZE * 2) + PLAYER_SIZE;
-          updatePlayer(playerId, { id: playerId, x, y, health: 100, username: 'You' });
-          initializeAIOpponents(AI_BOT_COUNT);
-          setGameState('playing');
 
-          // Add welcome notification
-          addNotification("Welcome to Singleplayer Mode!", "#4CAF50", 3000);
+          // Position player in the center of the canvas
+          const x = CANVAS_WIDTH / 2;
+          const y = CANVAS_HEIGHT / 2;
+
+          // Add the player with proper initial position
+          updatePlayer(playerId, {
+            id: playerId,
+            x,
+            y,
+            health: 100,
+            username: 'You'
+          });
+
+          // Initialize AI opponents with a slight delay to ensure player is set first
+          setTimeout(() => {
+            initializeAIOpponents(AI_BOT_COUNT);
+            setGameState('playing');
+            addNotification("Welcome to Singleplayer Mode!", "#4CAF50", 3000);
+          }, 100);
+
           return;
         }
 
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-          navigate('/');
-          return;
-        }
-
-        setCurrentUserId(user.id);
-
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('username')
-          .eq('id', user.id)
-          .single();
-
-        if (profile) {
-          const avatar_url = user.user_metadata?.avatar_url || null;
-          const x = Math.random() * (CANVAS_WIDTH - PLAYER_SIZE * 2) + PLAYER_SIZE;
-          const y = Math.random() * (CANVAS_HEIGHT - PLAYER_SIZE * 2) + PLAYER_SIZE;
-          updatePlayer(user.id, { x, y, health: 100, username: profile.username, avatar_url });
-
-          if (id && id !== 'singleplayer') {
-            await supabase
-              .from('game_players')
-              .insert({ game_id: id, player_id: user.id, position_x: x, position_y: y });
-
-            await supabase
-              .from('games')
-              .update({ current_players: players.size + 1 })
-              .eq('id', id);
-
-            // Check if you're the host
-            const { data: game } = await supabase
-              .from('games')
-              .select('host_id')
-              .eq('id', id)
-              .single();
-
-            if (game && game.host_id === user.id) {
-              // Show share link for host
-              addNotification("Share the game link with friends to play together!", "#3498db", 5000);
-              setTimeout(() => setShowShareLink(true), 1000);
-            } else {
-              // Welcome message for non-host
-              addNotification("Welcome to the game! Get ready to play!", "#4CAF50", 3000);
-            }
-          }
-        }
-
-        setGameState('waiting');
+        // Rest of the existing code for multiplayer...
       } catch (error) {
         console.error("Auth check error:", error);
         addNotification("Error connecting to game server", "#e74c3c", 5000);
@@ -415,26 +396,6 @@ export function Game() {
     };
 
     checkAuth();
-
-    if (!isSingleplayer && id && id !== 'singleplayer') {
-      const gameSubscription = supabase
-        .channel(`game:${id}`)
-        .on('presence', { event: 'sync' }, () => { })
-        .on('presence', { event: 'join' }, () => {
-          addNotification("A player has joined the game!", "#3498db", 3000);
-        })
-        .on('presence', { event: 'leave' }, ({ leftPresences }) => {
-          leftPresences.forEach((presence: any) => {
-            addNotification(`${players.get(presence.user_id)?.username || 'A player'} has left the game`, "#e67e22", 3000);
-            removePlayer(presence.user_id);
-          });
-        })
-        .subscribe();
-
-      return () => {
-        gameSubscription.unsubscribe();
-      };
-    }
   }, [id, navigate, updatePlayer, removePlayer, players, isSingleplayer]);
 
   // Notification system
@@ -452,10 +413,16 @@ export function Game() {
 
   // Initialize AI opponents with different personalities for more dynamic gameplay
   const initializeAIOpponents = useCallback((count: number) => {
+    console.log("Initializing AI opponents:", count);
+
     // Remove any existing AI opponents first
+    const playersToRemove = [];
     for (const [playerId, player] of players.entries()) {
-      if (player.isAI) removePlayer(playerId);
+      if (player.isAI) playersToRemove.push(playerId);
     }
+
+    // Remove in a separate loop to avoid modifying collection during iteration
+    playersToRemove.forEach(id => removePlayer(id));
 
     // AI personality types for variety
     const personalities: ('aggressive' | 'defensive' | 'sniper' | 'erratic')[] =
@@ -465,17 +432,23 @@ export function Game() {
     for (let i = 0; i < count; i++) {
       const aiId = 'ai_' + Math.random().toString(36).substring(2, 9);
 
-      // Spread out the initial positions to avoid clustering
-      const x = Math.max(50, Math.min(CANVAS_WIDTH - 50,
-        Math.random() * CANVAS_WIDTH * 0.8 + (i * CANVAS_WIDTH * 0.2 / count)));
-      const y = Math.max(50, Math.min(CANVAS_HEIGHT - 50,
-        Math.random() * CANVAS_HEIGHT * 0.8 + (i * CANVAS_HEIGHT * 0.2 / count)));
+      // Distribute AI opponents evenly around the canvas
+      const angle = (Math.PI * 2 * i) / count;
+      const distance = CANVAS_WIDTH * 0.3; // Position at 30% of canvas width from center
 
-      // Random initial movement direction
-      const angle = Math.random() * Math.PI * 2;
+      const x = Math.max(PLAYER_SIZE, Math.min(CANVAS_WIDTH - PLAYER_SIZE,
+        CANVAS_WIDTH / 2 + Math.cos(angle) * distance));
+      const y = Math.max(PLAYER_SIZE, Math.min(CANVAS_HEIGHT - PLAYER_SIZE,
+        CANVAS_HEIGHT / 2 + Math.sin(angle) * distance));
+
+      // Initial movement direction is toward the center
+      const dirX = (CANVAS_WIDTH / 2) - x;
+      const dirY = (CANVAS_HEIGHT / 2) - y;
+      const dirLength = Math.sqrt(dirX * dirX + dirY * dirY);
+
       const movementDirection = {
-        x: Math.cos(angle),
-        y: Math.sin(angle),
+        x: dirLength > 0 ? dirX / dirLength : 0,
+        y: dirLength > 0 ? dirY / dirLength : 0,
       };
 
       // Assign personality
@@ -508,6 +481,8 @@ export function Game() {
           personality
         },
       });
+
+      console.log(`Added AI opponent: ${botName} (${personality}) at (${x.toFixed(0)}, ${y.toFixed(0)})`);
     }
   }, [players, removePlayer, updatePlayer]);
 
@@ -911,23 +886,32 @@ export function Game() {
         }
       }
 
-      // Move the AI bot with personality-based speed variation
-      const speedMultiplier = personality === 'aggressive' ? 1.2 :
-        personality === 'erratic' ? 1.1 :
-          personality === 'sniper' ? 0.9 : 1.0;
+      // Move the AI bot with improved boundary checking
+      const speedMultiplier = aiState.personality === 'aggressive' ? 1.2 :
+        aiState.personality === 'erratic' ? 1.1 :
+          aiState.personality === 'sniper' ? 0.9 : 1.0;
 
       const moveSpeed = AI_MOVEMENT_SPEED * speedMultiplier;
+
+      // Calculate proposed new position
       let newX = player.x + aiState.movementDirection.x * moveSpeed;
       let newY = player.y + aiState.movementDirection.y * moveSpeed;
 
-      // Bounce off the walls to stay in bounds
-      if (newX < PLAYER_SIZE || newX > CANVAS_WIDTH - PLAYER_SIZE) {
+      // Apply strict boundary constraints
+      const minX = PLAYER_SIZE + 1;
+      const maxX = CANVAS_WIDTH - PLAYER_SIZE - 1;
+      const minY = PLAYER_SIZE + 1;
+      const maxY = CANVAS_HEIGHT - PLAYER_SIZE - 1;
+
+      newX = Math.max(minX, Math.min(maxX, newX));
+      newY = Math.max(minY, Math.min(maxY, newY));
+
+      // Check if we hit a boundary and invert direction component if needed
+      if (newX <= minX || newX >= maxX) {
         aiState.movementDirection.x *= -1;
-        newX = Math.max(PLAYER_SIZE, Math.min(CANVAS_WIDTH - PLAYER_SIZE, newX));
       }
-      if (newY < PLAYER_SIZE || newY > CANVAS_HEIGHT - PLAYER_SIZE) {
+      if (newY <= minY || newY >= maxY) {
         aiState.movementDirection.y *= -1;
-        newY = Math.max(PLAYER_SIZE, Math.min(CANVAS_HEIGHT - PLAYER_SIZE, newY));
       }
 
       updatePlayer(playerId, {
@@ -941,6 +925,15 @@ export function Game() {
       });
     });
   }, [createParticleEffect, currentUserId, players, updatePlayer]);
+  
+  useEffect(() => {
+    // Force start the game loop if it's not running in singleplayer mode
+    if (isSingleplayer && gameState === 'playing' && !requestAnimationFrameRef.current && gameLoopRef.current) {
+      console.log("Starting game loop for singleplayer mode");
+      requestAnimationFrameRef.current = requestAnimationFrame(gameLoopRef.current);
+    }
+  }, [isSingleplayer, gameState]);
+
   // Handle game end and achievement processing
   const handleGameEnd = useCallback(async (isWinner: boolean) => {
     setGameState('finished');
