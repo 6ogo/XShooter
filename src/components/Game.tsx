@@ -6,7 +6,7 @@ import { AchievementNotification } from './AchievementNotification';
 import { Avatar } from './Avatar';
 import { achievementService, GameCompletionData } from '../lib/achievementService';
 import { MobileControls } from './MobileControls';
-import { Share2, RefreshCw, LogOut, HelpCircle, X, Check, ChevronRight } from 'lucide-react';
+import { Share2, RefreshCw, LogOut, HelpCircle, X, Check, ChevronRight, Settings as SettingsIcon } from 'lucide-react';
 import { ShareGame } from './ShareGame';
 
 // Game constants - moved to the top for easier configuration
@@ -2267,7 +2267,44 @@ useEffect(() => {
   }
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 p-4" tabIndex={0}>
+    <div className="flex flex-col items-center min-h-screen bg-gray-900 p-4" tabIndex={0}>
+      {/* Game controls bar above the canvas */}
+      <div className="w-full max-w-screen-lg mb-4 flex justify-between items-center">
+        <div className="flex items-center gap-3">
+          {/* Exit Button */}
+          <button
+            onClick={handleReturnToLobby}
+            className="bg-red-600 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg hover:bg-red-700 transition-colors"
+            title="Exit Game"
+          >
+            <LogOut size={18} />
+            <span>Exit Game</span>
+          </button>
+        </div>
+        
+        <div className="flex items-center gap-3">
+          {/* Settings Button */}
+          <button
+            onClick={() => alert("Settings functionality to be implemented")}
+            className="bg-gray-700 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg hover:bg-gray-600 transition-colors"
+          >
+            <SettingsIcon size={18} />
+            <span>Settings</span>
+          </button>
+          
+          {/* Share Game Button (only for hosts in waiting state) */}
+          {showShareLink && !isSingleplayer && (
+            <button
+              onClick={handleShareGame}
+              className="bg-indigo-600 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg cursor-pointer hover:bg-indigo-700 transition-colors"
+            >
+              <Share2 size={16} />
+              <span>Share Game</span>
+            </button>
+          )}
+        </div>
+      </div>
+      
       <div className="relative">
         <canvas
           ref={canvasRef}
@@ -2276,7 +2313,7 @@ useEffect(() => {
           onClick={handleShoot}
           className="bg-gray-800 rounded-lg shadow-2xl border border-gray-700"
         />
-
+  
         {/* Game Info Overlay */}
         <div className="absolute top-4 right-4 bg-black bg-opacity-50 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg">
           <div className="w-2 h-2 rounded-full bg-green-500"></div>
@@ -2284,7 +2321,7 @@ useEffect(() => {
             {isSingleplayer ? 'Singleplayer' : `${Array.from(players.values()).filter(p => p.health > 0).length} Players`}
           </span>
         </div>
-
+  
         {/* Help Button */}
         <button
           onClick={() => setShowTutorial(true)}
@@ -2293,17 +2330,7 @@ useEffect(() => {
         >
           <HelpCircle size={20} />
         </button>
-
-        {/* Exit Button */}
-        <button
-          onClick={handleReturnToLobby}
-          className="absolute top-16 left-4 bg-red-600 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg hover:bg-red-700 transition-colors"
-          title="Exit Game"
-        >
-          <LogOut size={18} />
-          <span>Exit Game</span>
-        </button>
-
+  
         {/* Share Game Modal */}
         {showShareDialog && !isSingleplayer && (
           <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
@@ -2316,19 +2343,7 @@ useEffect(() => {
             </div>
           </div>
         )}
-
-        {/* Share Game Button (only for hosts in waiting state) */}
-        {showShareLink && !isSingleplayer && (
-          <button
-            onClick={handleShareGame}
-            className="absolute top-16 right-4 bg-indigo-600 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg cursor-pointer hover:bg-indigo-700 transition-colors"
-          >
-            <Share2 size={16} />
-            <span>Share Game</span>
-          </button>
-        )}
-
-
+  
         {/* Game Over Overlay */}
         {gameState === 'finished' && (
           <div className="absolute inset-0 bg-black bg-opacity-70 flex flex-col items-center justify-center rounded-lg">
@@ -2351,7 +2366,7 @@ useEffect(() => {
             <p className="text-xl text-white mb-6">
               {currentUserId && players.get(currentUserId) && players.get(currentUserId)!.health > 0 ? 'You Won!' : 'Better luck next time!'}
             </p>
-
+  
             <div className="bg-gray-800 p-4 rounded-lg mb-8 w-64 shadow-lg">
               <h3 className="text-white text-center mb-4 font-semibold">Your Stats</h3>
               <div className="grid grid-cols-2 gap-4">
@@ -2375,7 +2390,7 @@ useEffect(() => {
                 </div>
               </div>
             </div>
-
+  
             <div className="flex gap-4">
               <button
                 onClick={handleRestart}
@@ -2396,7 +2411,7 @@ useEffect(() => {
             </div>
           </div>
         )}
-
+  
         {/* Tutorial Overlay */}
         {showTutorial && (
           <div className="absolute inset-0 bg-black bg-opacity-80 flex items-center justify-center rounded-lg">
@@ -2410,9 +2425,9 @@ useEffect(() => {
                   <X size={20} />
                 </button>
               </div>
-
+  
               <p className="text-gray-300 mb-6">{tutorialSteps[tutorialStep].content}</p>
-
+  
               <div className="flex justify-between">
                 <button
                   onClick={() => setTutorialStep(Math.max(0, tutorialStep - 1))}
@@ -2424,7 +2439,7 @@ useEffect(() => {
                 >
                   Previous
                 </button>
-
+  
                 {tutorialStep < tutorialSteps.length - 1 ? (
                   <button
                     onClick={() => setTutorialStep(tutorialStep + 1)}
@@ -2445,12 +2460,12 @@ useEffect(() => {
           </div>
         )}
       </div>
-
+  
       {/* Mobile Controls */}
       {isMobile && !showTutorial && <MobileControls onMove={handleMobileMove} onShoot={handleMobileShoot} />}
-
+  
       {/* Achievement Notification */}
       <AchievementNotification achievement={unlockingAchievement} onClose={() => setUnlockingAchievement(null)} />
     </div>
   );
-};
+}
