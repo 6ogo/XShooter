@@ -1,3 +1,4 @@
+// src/lib/achievementService.ts
 import { supabase } from './supabase';
 
 // Types of achievement checks
@@ -28,6 +29,17 @@ export interface GameCompletionData {
   multiKills: { count: number, timespan: number }[];
   lowestHealth: number;
   timeWithLowHealth: number;
+}
+
+// Achievement interface
+export interface Achievement {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  icon: string;
+  requirement_type: AchievementCheckType;
+  requirement_value: number;
 }
 
 class AchievementService {
@@ -76,6 +88,37 @@ class AchievementService {
           
           if (!insertError) {
             newlyUnlocked.push(achievement.id);
+            
+            // Notifications will be created automatically by database trigger
+            // But we can also create them here in case the trigger fails
+            try {
+              // Check if notification was created (wait a moment)
+              await new Promise(resolve => setTimeout(resolve, 500));
+              
+              const { count } = await supabase
+                .from('notifications')
+                .select('id', { count: 'exact', head: true })
+                .eq('user_id', data.playerId)
+                .eq('type', 'achievement')
+                .eq('related_id', achievement.id)
+                .gt('created_at', new Date(Date.now() - 10000).toISOString());
+              
+              // If notification wasn't created, create it manually
+              if (!count) {
+                // Create notification manually
+                await supabase
+                  .from('notifications')
+                  .insert({
+                    user_id: data.playerId,
+                    type: 'achievement',
+                    title: 'Achievement Unlocked',
+                    message: `You unlocked the "${achievement.name}" achievement!`,
+                    related_id: achievement.id
+                  });
+              }
+            } catch (e) {
+              console.error('Error handling achievement notification:', e);
+            }
           }
         }
       }
@@ -83,6 +126,44 @@ class AchievementService {
       return newlyUnlocked;
     } catch (error) {
       console.error('Error checking achievements:', error);
+      return [];
+    }
+  }
+  
+  // Get all achievements for a player with unlock status
+  async getPlayerAchievements(playerId: string) {
+    try {
+      // Get all achievements
+      const { data: achievements, error } = await supabase
+        .from('achievements')
+        .select('*')
+        .order('category');
+        
+      if (error) throw error;
+      if (!achievements) return [];
+      
+      // Get unlocked achievements for the player
+      const { data: playerAchievements, error: playerError } = await supabase
+        .from('player_achievements')
+        .select('achievement_id, unlocked_at')
+        .eq('player_id', playerId);
+        
+      if (playerError) throw playerError;
+      
+      // Create a map of unlocked achievements
+      const unlockedMap = new Map();
+      (playerAchievements || []).forEach(pa => {
+        unlockedMap.set(pa.achievement_id, pa.unlocked_at);
+      });
+      
+      // Map achievements with unlock status
+      return achievements.map(achievement => ({
+        ...achievement,
+        unlocked: unlockedMap.has(achievement.id),
+        unlocked_at: unlockedMap.get(achievement.id) || null
+      }));
+    } catch (error) {
+      console.error('Error getting player achievements:', error);
       return [];
     }
   }
@@ -117,11 +198,11 @@ class AchievementService {
   /**
    * Check achievements based on single game performance
    */
-  private checkSingleGameAchievement(
+  private async checkSingleGameAchievement(
     name: string, 
     value: number, 
     data: GameCompletionData
-  ): boolean {
+  ): Promise<boolean> {
     switch (name) {
       case 'Sharpshooter':
         return data.accuracy >= 50;
@@ -163,7 +244,7 @@ class AchievementService {
         return data.multiKills.some(mk => mk.count >= 2 && mk.timespan <= 3); // 2 kills within 3 seconds
         
       case 'Popular Player':
-        return this.checkGameParticipants(data.gameId) >= 5;
+        return await this.checkGameParticipants(data.gameId) >= 5;
         
       case 'Comeback Kid':
         return data.winner && data.lowestHealth <= 20;
@@ -272,7 +353,7 @@ class AchievementService {
   private async checkGamesHosted(playerId: string, threshold: number): Promise<boolean> {
     const { count } = await supabase
       .from('games')
-      .select('id', { count: 'exact' })
+      .select('id', { count: 'exact', head: true })
       .eq('host_id', playerId);
       
     return (count || 0) >= threshold;
@@ -307,7 +388,7 @@ class AchievementService {
   private async checkGameParticipants(gameId: string): Promise<number> {
     const { count } = await supabase
       .from('game_players')
-      .select('id', { count: 'exact' })
+      .select('id', { count: 'exact', head: true })
       .eq('game_id', gameId);
       
     return count || 0;

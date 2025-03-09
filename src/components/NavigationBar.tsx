@@ -1,7 +1,9 @@
+// src/components/NavigationBar.tsx
 import { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { Avatar } from './Avatar';
+import { notificationService, Notification } from '../lib/notificationService';
 import { 
   LogOut, 
   Trophy, 
@@ -12,22 +14,17 @@ import {
   Home,
   Twitter,
   HelpCircle,
-  Bell
+  Bell,
+  Check,
+  AlertCircle,
+  MessageSquare,
+  Gamepad
 } from 'lucide-react';
 
 interface UserData {
   id: string;
   username: string;
   avatar_url?: string;
-}
-
-interface Notification {
-  id: string;
-  type: 'achievement' | 'game' | 'social' | 'system';
-  title: string;
-  message: string;
-  isRead: boolean;
-  timestamp: string;
 }
 
 interface NavigationBarProps {
@@ -42,8 +39,12 @@ export function NavigationBar({ currentPage = 'lobby' }: NavigationBarProps) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [userData, setUserData] = useState<UserData | null>(null);
   const [twitterHandle, setTwitterHandle] = useState<string | null>(null);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  // Replace placeholder notifications with real ones
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [notificationsLoading, setNotificationsLoading] = useState(true);
   
   // Detect active page from location if not provided as prop
   const activePage = currentPage || (
@@ -77,36 +78,8 @@ export function NavigationBar({ currentPage = 'lobby' }: NavigationBarProps) {
             setTwitterHandle(user.user_metadata?.preferred_username || null);
           }
           
-          // Fetch notifications (example - would be implemented with a real table)
-          // This is just mockup data
-          const mockNotifications: Notification[] = [
-            {
-              id: '1',
-              type: 'achievement',
-              title: 'Achievement Unlocked',
-              message: 'You unlocked the "Sharpshooter" achievement!',
-              isRead: false,
-              timestamp: new Date(Date.now() - 30 * 60000).toISOString()
-            },
-            {
-              id: '2',
-              type: 'game',
-              title: 'Game Invitation',
-              message: 'Player123 invited you to join their game',
-              isRead: true,
-              timestamp: new Date(Date.now() - 2 * 3600000).toISOString()
-            },
-            {
-              id: '3',
-              type: 'system',
-              title: 'Welcome to XShooter',
-              message: 'Thanks for joining! Check out the tutorial to get started.',
-              isRead: true,
-              timestamp: new Date(Date.now() - 2 * 86400000).toISOString()
-            }
-          ];
-          
-          setNotifications(mockNotifications);
+          // Fetch real notifications
+          await fetchNotifications();
         }
       } catch (error) {
         console.error('Error fetching user data:', error);
@@ -116,7 +89,83 @@ export function NavigationBar({ currentPage = 'lobby' }: NavigationBarProps) {
     };
     
     fetchUserData();
-  }, []);
+
+    // Set up real-time subscription for new notifications
+    const setupSubscription = async () => {
+      const subscription = await notificationService.subscribeToNotifications((notification) => {
+        // Add new notification to state
+        setNotifications(prev => [notification, ...prev]);
+        // Update unread count
+        setUnreadCount(prev => prev + 1);
+        
+        // Play notification sound if enabled
+        // This could be tied to a user setting
+        try {
+          const notificationSound = new Audio('/notification.mp3');
+          notificationSound.volume = 0.5;
+          notificationSound.play().catch(e => console.error('Error playing notification sound:', e));
+        } catch (error) {
+          console.error('Error playing notification sound:', error);
+        }
+      });
+      
+      return subscription;
+    };
+    
+    const subscription = setupSubscription();
+    
+    // Cleanup subscription on unmount
+    return () => {
+      subscription.then(sub => {
+        if (sub) sub.unsubscribe();
+      });
+    };
+  }, [navigate]);
+
+  // Fetch notifications function
+  const fetchNotifications = async () => {
+    setNotificationsLoading(true);
+    try {
+      // Get all notifications
+      const fetchedNotifications = await notificationService.getNotifications();
+      setNotifications(fetchedNotifications);
+      
+      // Count unread
+      const unreadNotifications = fetchedNotifications.filter(n => !n.isRead).length;
+      setUnreadCount(unreadNotifications);
+    } catch (error) {
+      console.error('Error fetching notifications:', error);
+    } finally {
+      setNotificationsLoading(false);
+    }
+  };
+  
+  // Mark all notifications as read
+  const markAllNotificationsAsRead = async () => {
+    try {
+      await notificationService.markAllAsRead();
+      // Update local state
+      setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+      setUnreadCount(0);
+    } catch (error) {
+      console.error('Error marking notifications as read:', error);
+    }
+  };
+  
+  // Mark a single notification as read
+  const markAsRead = async (notificationId: string) => {
+    try {
+      await notificationService.markAsRead(notificationId);
+      // Update local state
+      setNotifications(prev => 
+        prev.map(n => n.id === notificationId ? { ...n, isRead: true } : n)
+      );
+      // Update unread count
+      setUnreadCount(prev => Math.max(0, prev - 1));
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+    }
+  };
   
   const handleSignOut = async () => {
     try {
@@ -143,10 +192,7 @@ export function NavigationBar({ currentPage = 'lobby' }: NavigationBarProps) {
     if (userDropdownOpen) setUserDropdownOpen(false);
   };
   
-  const markAllNotificationsAsRead = () => {
-    setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
-  };
-  
+  // Format relative time
   const formatTime = (timestamp: string) => {
     const date = new Date(timestamp);
     const now = new Date();
@@ -168,7 +214,20 @@ export function NavigationBar({ currentPage = 'lobby' }: NavigationBarProps) {
     }
   };
   
-  const unreadNotificationsCount = notifications.filter(n => !n.isRead).length;
+  // Get notification icon based on type
+  const getNotificationIcon = (type: Notification['type']) => {
+    switch (type) {
+      case 'achievement':
+        return <Award className="h-5 w-5 text-yellow-400" />;
+      case 'game':
+        return <Gamepad className="h-5 w-5 text-indigo-400" />;
+      case 'social':
+        return <MessageSquare className="h-5 w-5 text-green-400" />;
+      case 'system':
+      default:
+        return <AlertCircle className="h-5 w-5 text-blue-400" />;
+    }
+  };
 
   return (
     <nav className="bg-gray-800 text-white border-b border-gray-700 shadow-lg">
@@ -229,9 +288,9 @@ export function NavigationBar({ currentPage = 'lobby' }: NavigationBarProps) {
                 aria-label="Notifications"
               >
                 <Bell size={20} />
-                {unreadNotificationsCount > 0 && (
+                {unreadCount > 0 && (
                   <span className="absolute top-0 right-0 bg-red-500 text-white text-xs w-4 h-4 flex items-center justify-center rounded-full">
-                    {unreadNotificationsCount}
+                    {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
                 )}
               </button>
@@ -250,24 +309,48 @@ export function NavigationBar({ currentPage = 'lobby' }: NavigationBarProps) {
                   </div>
                   
                   <div className="max-h-80 overflow-y-auto">
-                    {notifications.length === 0 ? (
-                      <div className="p-4 text-center text-gray-400">
-                        No notifications
+                    {notificationsLoading ? (
+                      <div className="p-4 text-center">
+                        <div className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-solid border-indigo-500 border-r-transparent"></div>
+                        <p className="mt-2 text-sm text-gray-400">Loading notifications...</p>
+                      </div>
+                    ) : notifications.length === 0 ? (
+                      <div className="p-8 text-center text-gray-400">
+                        <Bell className="h-8 w-8 mx-auto mb-2 text-gray-600" />
+                        <p>No notifications</p>
+                        <p className="text-sm mt-1">Your notifications will appear here</p>
                       </div>
                     ) : (
                       notifications.map(notification => (
                         <div 
                           key={notification.id}
                           className={`p-3 border-b border-gray-700 hover:bg-gray-750 ${!notification.isRead ? 'bg-indigo-900/20' : ''}`}
+                          onClick={() => markAsRead(notification.id)}
                         >
                           <div className="flex">
-                            <div className={`w-2 h-2 rounded-full mt-2 mr-2 ${!notification.isRead ? 'bg-indigo-500' : 'bg-transparent'}`}></div>
+                            <div className="flex-shrink-0 mr-3">
+                              {getNotificationIcon(notification.type)}
+                            </div>
                             <div className="flex-1">
                               <div className="flex justify-between">
                                 <h4 className="font-medium text-sm">{notification.title}</h4>
-                                <span className="text-xs text-gray-400">{formatTime(notification.timestamp)}</span>
+                                <span className="text-xs text-gray-400">{formatTime(notification.createdAt)}</span>
                               </div>
                               <p className="text-sm text-gray-300 mt-1">{notification.message}</p>
+                              
+                              {!notification.isRead && (
+                                <div className="mt-2 flex justify-end">
+                                  <button 
+                                    className="text-xs bg-indigo-700 hover:bg-indigo-600 text-white px-2 py-1 rounded flex items-center"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      markAsRead(notification.id);
+                                    }}
+                                  >
+                                    <Check className="h-3 w-3 mr-1" /> Mark as read
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -275,11 +358,13 @@ export function NavigationBar({ currentPage = 'lobby' }: NavigationBarProps) {
                     )}
                   </div>
                   
-                  <div className="p-2 border-t border-gray-700 text-center">
-                    <button className="text-sm text-indigo-400 hover:text-indigo-300">
-                      View all notifications
-                    </button>
-                  </div>
+                  {notifications.length > 0 && (
+                    <div className="p-2 border-t border-gray-700 text-center">
+                      <button className="text-sm text-indigo-400 hover:text-indigo-300 p-1">
+                        View all notifications
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
