@@ -542,6 +542,92 @@ export function GameLobby() {
     );
   }
 
+  const joinGameByCode = async (room_code: string) => {
+    if (!currentUser) {
+      setError('You must be logged in to join a game');
+      return;
+    }
+
+    setJoiningGame(true);
+    setError(null);
+
+    try {
+      // Find the game by room code
+      const { data: games, error: gameError } = await supabase
+        .from('games')
+        .select('*')
+        .eq('room_code', room_code)
+        .eq('status', 'waiting');
+
+      if (gameError) {
+        console.error('Error finding game:', gameError);
+        throw new Error(`Failed to find game: ${gameError.message}`);
+      }
+
+      if (!games || games.length === 0) {
+        throw new Error('Game not found or has already started');
+      }
+
+      const game = games[0];
+
+      if (game.current_players >= game.max_players) {
+        throw new Error('Game is full');
+      }
+
+      // Check if user is already in this game
+      const { data: existingPlayer } = await supabase
+        .from('game_players')
+        .select('id')
+        .eq('game_id', game.id)
+        .eq('player_id', currentUser.id);
+
+      if (existingPlayer && existingPlayer.length > 0) {
+        // If already in the game, just navigate there
+        setGameId(game.id);
+        setRoomCode(game.room_code);
+        setIsHost(game.host_id === currentUser.id);
+        navigate(`/game/${game.id}`);
+        return;
+      }
+
+      // Add player to the game
+      const { error: joinError } = await supabase
+        .from('game_players')
+        .insert({
+          game_id: game.id,
+          player_id: currentUser.id,
+          position_x: Math.floor(Math.random() * 700) + 50,  // Random starting position
+          position_y: Math.floor(Math.random() * 500) + 50   // Random starting position
+        });
+
+      if (joinError) {
+        console.error('Error joining game:', joinError);
+        throw new Error(`Failed to join game: ${joinError.message}`);
+      }
+
+      // Update player count
+      const { error: updateError } = await supabase
+        .from('games')
+        .update({ current_players: game.current_players + 1 })
+        .eq('id', game.id);
+
+      if (updateError) {
+        console.error('Error updating player count:', updateError);
+        // Not a critical error, we can still continue
+      }
+
+      // Update local state and navigate
+      setGameId(game.id);
+      setRoomCode(game.room_code);
+      setIsHost(game.host_id === currentUser.id);
+      navigate(`/game/${game.id}`);
+    } catch (err) {
+      console.error('Join game error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to join game. Please try again.');
+    } finally {
+      setJoiningGame(false);
+    }
+  };
   return (
     <Layout>
       <div className="p-6">
@@ -757,10 +843,11 @@ export function GameLobby() {
                               {formatTimeAgo(game.created_at)}
                             </td>
                             <td className="py-3 px-2 text-right">
-                              <button
+                            <button
                                 onClick={() => {
-                                  setRoomCodeInput(game.room_code);
-                                  joinGame();
+                                  // Directly call joinGameByCode with the room code from the game
+                                  // instead of setting state and calling joinGame
+                                  joinGameByCode(game.room_code);
                                 }}
                                 disabled={joiningGame || game.current_players >= game.max_players}
                                 className="px-3 py-1 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-50 transition-colors duration-200"
