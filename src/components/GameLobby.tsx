@@ -15,7 +15,7 @@ interface UserData {
 }
 
 export function GameLobby() {
-  const [, setRoomCodeState] = useState<string>('');
+  const [] = useState<string>('');
   const { setGameId, setRoomCode, setIsHost, reset } = useGameStore();
   const [activeGames, setActiveGames] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,11 +34,11 @@ export function GameLobby() {
   useEffect(() => {
     // Reset game store when entering lobby
     reset();
-    
+
     const fetchUserData = async () => {
       try {
         setLoading(true);
-        
+
         const { data: { user } } = await supabase.auth.getUser();
         if (user) {
           const { data } = await supabase
@@ -48,11 +48,11 @@ export function GameLobby() {
             .single();
 
           if (data) {
-            setUserData({ 
-              id: user.id, 
-              username: data.username, 
+            setUserData({
+              id: user.id,
+              username: data.username,
               email: user.email,
-              avatar_url: user.user_metadata?.avatar_url 
+              avatar_url: user.user_metadata?.avatar_url
             });
           }
           setCurrentUser(user);
@@ -68,7 +68,7 @@ export function GameLobby() {
     };
 
     fetchUserData();
-    
+
     // Check if this is the first time a user has visited the lobby
     const hasSeenTutorial = localStorage.getItem('hasSeenTutorial');
     if (!hasSeenTutorial) {
@@ -78,6 +78,14 @@ export function GameLobby() {
   }, [navigate, reset]);
 
   useEffect(() => {
+    // Clean up any old or empty games when the lobby loads
+    cleanupEmptyGames();
+
+  // Set up a recurring cleanup every 90s
+  const cleanupInterval = setInterval(() => {
+    cleanupEmptyGames();
+  }, 90000); // 90 seconds
+
     const fetchGames = async () => {
       const { data: games, error } = await supabase
         .from('games')
@@ -99,10 +107,12 @@ export function GameLobby() {
       .subscribe();
 
     return () => {
+      clearInterval(cleanupInterval);
       gameSubscription.unsubscribe();
     };
   }, []);
 
+  // Replace the createGame function with this fixed version
   const createGame = async () => {
     if (!currentUser) {
       setError('You must be logged in to create a game');
@@ -111,10 +121,21 @@ export function GameLobby() {
     setCreatingGame(true);
     setError(null);
     try {
-      // Generate a unique room code first
+      // Generate a unique room code
       const generatedRoomCode = `ROOM-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-      
-      // Create the game with the room code directly
+
+      // First check if a similar room code already exists to avoid conflicts
+      const { data: existingRooms } = await supabase
+        .from('games')
+        .select('id')
+        .eq('room_code', generatedRoomCode);
+
+      if (existingRooms && existingRooms.length > 0) {
+        // If by rare chance we got a collision, regenerate
+        throw new Error('Room code collision, please try again');
+      }
+
+      // Create the game with the room code
       const { data: game, error: gameError } = await supabase
         .from('games')
         .insert({
@@ -144,22 +165,21 @@ export function GameLobby() {
         .insert({
           game_id: game.id,
           player_id: currentUser.id,
-          position_x: Math.floor(Math.random() * 700) + 50,  // Random starting position
-          position_y: Math.floor(Math.random() * 500) + 50   // Random starting position
+          position_x: Math.floor(Math.random() * 700) + 50,
+          position_y: Math.floor(Math.random() * 500) + 50
         });
 
       if (playerError) {
         console.error('Error adding player to game:', playerError);
-        
-        // Attempt to clean up the created game
+
+        // Clean up the created game
         await supabase.from('games').delete().eq('id', game.id);
-        
+
         throw new Error(`Failed to join created game: ${playerError.message}`);
       }
 
       // Update local state and navigate
       setGameId(game.id);
-      setRoomCodeState(generatedRoomCode);
       setRoomCode(generatedRoomCode);
       setIsHost(true);
       navigate(`/game/${game.id}`);
@@ -171,24 +191,25 @@ export function GameLobby() {
     }
   };
 
+
   const joinGame = async () => {
     if (!currentUser) {
       setError('You must be logged in to join a game');
       return;
     }
-    
+
     if (!roomCodeInput) {
       setError('Please enter a room code');
       return;
     }
-    
+
     setJoiningGame(true);
     setError(null);
-    
+
     try {
       // Standardize room code format (uppercase)
       const formattedRoomCode = roomCodeInput.trim().toUpperCase();
-      
+
       // Find the game
       const { data: games, error: gameError } = await supabase
         .from('games')
@@ -217,7 +238,7 @@ export function GameLobby() {
         .select('id')
         .eq('game_id', game.id)
         .eq('player_id', currentUser.id);
-        
+
       if (existingPlayer && existingPlayer.length > 0) {
         // If already in the game, just navigate there
         setGameId(game.id);
@@ -271,14 +292,14 @@ export function GameLobby() {
       setError('You must be logged in to join quickplay');
       return;
     }
-    
+
     setJoiningGame(true);
     setError(null);
-    
+
     try {
       // Clean up old empty games first
       await cleanupEmptyGames();
-      
+
       // Find available games
       const { data: availableGames, error: gamesError } = await supabase
         .from('games')
@@ -294,21 +315,21 @@ export function GameLobby() {
       }
 
       let game;
-      
+
       // Try to join an existing game
       if (availableGames && availableGames.length > 0) {
         // Pick a random game from available ones to distribute players
         game = availableGames[Math.floor(Math.random() * availableGames.length)];
-        
+
         console.log('Found existing game to join:', game);
-        
+
         // Check if already in this game
         const { data: existingPlayer } = await supabase
           .from('game_players')
           .select('id')
           .eq('game_id', game.id)
           .eq('player_id', currentUser.id);
-          
+
         if (!(existingPlayer && existingPlayer.length > 0)) {
           // Add player to existing game
           const { error: joinError } = await supabase
@@ -335,7 +356,7 @@ export function GameLobby() {
         // Create new game if none available
         console.log('No available games, creating new one');
         const quickRoomCode = `QUICK-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-        
+
         const { data: newGame, error: newGameError } = await supabase
           .from('games')
           .insert({
@@ -352,14 +373,14 @@ export function GameLobby() {
           console.error('Error creating quickplay game:', newGameError);
           throw new Error(`Failed to create quickplay game: ${newGameError.message}`);
         }
-        
+
         if (!newGame) {
           throw new Error('Failed to create quickplay game - no game data returned');
         }
-        
+
         game = newGame;
         console.log('Created new quickplay game:', game);
-        
+
         // Add creator to the game
         const { error: playerError } = await supabase
           .from('game_players')
@@ -372,6 +393,10 @@ export function GameLobby() {
 
         if (playerError) {
           console.error('Error adding player to new game:', playerError);
+
+          // Clean up the created game
+          await supabase.from('games').delete().eq('id', game.id);
+
           throw new Error(`Failed to join new game: ${playerError.message}`);
         }
       }
@@ -388,55 +413,86 @@ export function GameLobby() {
       setJoiningGame(false);
     }
   };
-  
+
   // Function to clean up empty games or old inactive games
   const cleanupEmptyGames = async () => {
     try {
-      // Get all waiting games
+      console.log('Running cleanup for empty/inactive games');
+
+      // Step 1: Get all waiting games
       const { data: waitingGames, error: gamesError } = await supabase
         .from('games')
-        .select('id, current_players, created_at')
+        .select('id, current_players, created_at, host_id')
         .eq('status', 'waiting');
-      
+
       if (gamesError) {
         console.error('Error fetching games for cleanup:', gamesError);
         return;
       }
-      
+
       if (!waitingGames || waitingGames.length === 0) return;
-      
-      const now = new Date();
-      const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000); // 2 hours ago
-      
-      // Find games to clean up (empty or old)
-      const gamesToCleanup = waitingGames.filter(game => {
+
+      // Step 2: Get actual player counts by checking game_players table
+      const gamesToCleanup = [];
+
+      for (const game of waitingGames) {
+        // Check last activity time
+        const now = new Date();
         const gameDate = new Date(game.created_at);
-        return game.current_players <= 0 || gameDate < twoHoursAgo;
-      });
-      
-      if (gamesToCleanup.length === 0) return;
-      
-      console.log(`Cleaning up ${gamesToCleanup.length} empty or inactive games`);
-      
-      // Delete players first (foreign key constraint)
-      for (const game of gamesToCleanup) {
+        const hoursSinceCreation = (now.getTime() - gameDate.getTime()) / (1000 * 60 * 60);
+
+        // Games older than 2 hours should be cleaned up
+        if (hoursSinceCreation > 2) {
+          gamesToCleanup.push(game.id);
+          continue;
+        }
+
+        // Check if the game actually has players
+        const { count, error: countError } = await supabase
+          .from('game_players')
+          .select('*', { count: 'exact', head: true })
+          .eq('game_id', game.id);
+
+        if (countError) {
+          console.error(`Error checking players for game ${game.id}:`, countError);
+          continue;
+        }
+
+        // If there are no players or player count doesn't match, clean up
+        if (count === 0 || (game.current_players > 0 && count === 0)) {
+          gamesToCleanup.push(game.id);
+        }
+        // Update player count if it's incorrect but game should remain
+        else if (count !== game.current_players) {
+          await supabase
+            .from('games')
+            .update({ current_players: count })
+            .eq('id', game.id);
+        }
+      }
+
+      // Step 3: Delete the players from games to be cleaned up
+      if (gamesToCleanup.length > 0) {
+        console.log(`Cleaning up ${gamesToCleanup.length} empty or inactive games`);
+
         await supabase
           .from('game_players')
           .delete()
-          .eq('game_id', game.id);
+          .in('game_id', gamesToCleanup);
+
+        // Step 4: Delete the games
+        await supabase
+          .from('games')
+          .delete()
+          .in('id', gamesToCleanup);
+
+        console.log(`Cleanup complete, removed ${gamesToCleanup.length} games`);
       }
-      
-      // Then delete the games
-      await supabase
-        .from('games')
-        .delete()
-        .in('id', gamesToCleanup.map(g => g.id));
-        
     } catch (err) {
       console.error('Error cleaning up games:', err);
-      // Non-critical error, don't need to show to user
     }
   };
+
 
   const startSingleplayer = () => {
     setGameId('singleplayer');
@@ -449,7 +505,7 @@ export function GameLobby() {
     await supabase.auth.signOut();
     navigate('/');
   };
-  
+
   const formatTimeAgo = (dateString: string) => {
     const date = new Date(dateString);
     const now = new Date();
@@ -457,7 +513,7 @@ export function GameLobby() {
     const diffSecs = Math.floor(diffMs / 1000);
     const diffMins = Math.floor(diffSecs / 60);
     const diffHours = Math.floor(diffMins / 60);
-    
+
     if (diffSecs < 60) {
       return 'just now';
     } else if (diffMins < 60) {
@@ -487,8 +543,8 @@ export function GameLobby() {
           {userData && (
             <div className="flex justify-between items-center mb-6 text-white">
               <div className="flex items-center gap-2">
-                <Avatar 
-                  username={userData.username} 
+                <Avatar
+                  username={userData.username}
                   imageUrl={userData.avatar_url}
                   size="sm"
                 />
@@ -518,11 +574,11 @@ export function GameLobby() {
               </div>
             </div>
           )}
-          
+
           <div className="flex justify-between items-center mb-8">
             <div className="flex items-center">
               <h1 className="text-3xl font-bold text-white">Game Lobby</h1>
-              <button 
+              <button
                 onClick={() => setShowTutorial(true)}
                 className="ml-2 text-gray-400 hover:text-white"
                 title="Show Tutorial"
@@ -530,7 +586,7 @@ export function GameLobby() {
                 <HelpCircle size={18} />
               </button>
             </div>
-            
+
             <div className="flex gap-4">
               <button
                 onClick={() => navigate('/achievements')}
@@ -548,27 +604,27 @@ export function GameLobby() {
               </button>
             </div>
           </div>
-          
+
           {error && (
             <div className="mb-6 p-4 bg-red-600 text-white rounded-lg flex items-center">
               <Info className="h-5 w-5 mr-2" />
               {error}
             </div>
           )}
-          
+
           {successMessage && (
             <div className="mb-6 p-4 bg-green-600 text-white rounded-lg flex items-center">
               <Info className="h-5 w-5 mr-2" />
               {successMessage}
             </div>
           )}
-          
+
           <div className="grid lg:grid-cols-3 gap-6">
             {/* Game Options Panel */}
             <div className="lg:col-span-1">
               <div className="bg-gray-800 rounded-lg shadow-xl p-6 border border-gray-700">
                 <h2 className="text-2xl font-bold text-white mb-6">Play XShooter</h2>
-                
+
                 <div className="space-y-4">
                   <button
                     onClick={createGame}
@@ -587,7 +643,7 @@ export function GameLobby() {
                       </>
                     )}
                   </button>
-                  
+
                   <div className="flex space-x-4">
                     <input
                       type="text"
@@ -608,7 +664,7 @@ export function GameLobby() {
                       )}
                     </button>
                   </div>
-                  
+
                   <button
                     onClick={joinQuickplay}
                     disabled={joiningGame}
@@ -626,7 +682,7 @@ export function GameLobby() {
                       </>
                     )}
                   </button>
-                  
+
                   <button
                     onClick={startSingleplayer}
                     className="w-full py-3 px-4 bg-gradient-to-r from-purple-600 to-purple-500 text-white rounded-lg hover:from-purple-700 hover:to-purple-600 transition-all duration-200 flex justify-center items-center gap-2 shadow-lg"
@@ -635,7 +691,7 @@ export function GameLobby() {
                     Singleplayer
                   </button>
                 </div>
-                
+
                 <div className="mt-6 pt-6 border-t border-gray-700">
                   <h3 className="text-lg font-medium text-white mb-4">Game Information</h3>
                   <ul className="space-y-3 text-gray-300 text-sm">
@@ -655,12 +711,12 @@ export function GameLobby() {
                 </div>
               </div>
             </div>
-            
+
             {/* Active Games Panel */}
             <div className="lg:col-span-2">
               <div className="bg-gray-800 rounded-lg shadow-xl p-6 border border-gray-700">
                 <h2 className="text-2xl font-bold text-white mb-6">Active Games</h2>
-                
+
                 {activeGames.length === 0 ? (
                   <div className="text-center py-12 border-2 border-dashed border-gray-700 rounded-lg">
                     <Users className="h-12 w-12 mx-auto text-gray-600 mb-3" />
@@ -713,11 +769,11 @@ export function GameLobby() {
                   </div>
                 )}
               </div>
-              
+
               {/* Recent Activity Panel */}
               <div className="mt-6 bg-gray-800 rounded-lg shadow-xl p-6 border border-gray-700">
                 <h2 className="text-xl font-bold text-white mb-4">Your Recent Activity</h2>
-                
+
                 <div className="grid grid-cols-3 gap-4 mb-4">
                   <div className="bg-gray-700 p-4 rounded-lg">
                     <h3 className="text-gray-400 text-sm mb-1">Games Played</h3>
@@ -732,7 +788,7 @@ export function GameLobby() {
                     <p className="text-white text-2xl font-bold">-</p>
                   </div>
                 </div>
-                
+
                 <p className="text-center text-gray-500 text-sm">
                   View detailed statistics on the Leaderboard
                 </p>
@@ -741,7 +797,7 @@ export function GameLobby() {
           </div>
         </div>
       </div>
-      
+
       {/* Game Settings Modal */}
       {showSettings && (
         <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
@@ -750,14 +806,14 @@ export function GameLobby() {
           </div>
         </div>
       )}
-      
+
       {/* Tutorial Modal */}
       {showTutorial && (
         <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
           <div className="max-w-3xl w-full bg-gray-800 rounded-lg shadow-2xl p-6 text-white">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-2xl font-bold">Welcome to XShooter!</h2>
-              <button 
+              <button
                 onClick={() => setShowTutorial(false)}
                 className="text-gray-400 hover:text-white"
               >
@@ -766,7 +822,7 @@ export function GameLobby() {
                 </svg>
               </button>
             </div>
-            
+
             <div className="space-y-6">
               <div>
                 <h3 className="text-xl font-semibold mb-2 text-indigo-400">Game Overview</h3>
@@ -775,7 +831,7 @@ export function GameLobby() {
                   Players are represented by their X profile pictures and shoot small balls at each other to reduce opponents' health.
                 </p>
               </div>
-              
+
               <div>
                 <h3 className="text-xl font-semibold mb-2 text-indigo-400">Game Modes</h3>
                 <ul className="space-y-2 text-gray-300">
@@ -793,7 +849,7 @@ export function GameLobby() {
                   </li>
                 </ul>
               </div>
-              
+
               <div>
                 <h3 className="text-xl font-semibold mb-2 text-indigo-400">Controls</h3>
                 <div className="grid md:grid-cols-2 gap-4">
@@ -814,7 +870,7 @@ export function GameLobby() {
                   </div>
                 </div>
               </div>
-              
+
               <div>
                 <h3 className="text-xl font-semibold mb-2 text-indigo-400">Gameplay Tips</h3>
                 <ul className="space-y-2 text-gray-300">
@@ -832,7 +888,7 @@ export function GameLobby() {
                   </li>
                 </ul>
               </div>
-              
+
               <div className="pt-4 flex justify-end">
                 <button
                   onClick={() => setShowTutorial(false)}

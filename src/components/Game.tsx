@@ -7,18 +7,20 @@ import { Avatar } from './Avatar';
 import { achievementService, GameCompletionData } from '../lib/achievementService';
 import { MobileControls } from './MobileControls';
 import { Share2, RefreshCw, LogOut, HelpCircle, X, Check, ChevronRight } from 'lucide-react';
+import { ShareGame } from './ShareGame';
 
 // Game constants
 const CANVAS_WIDTH = 800;
 const CANVAS_HEIGHT = 600;
 const PLAYER_SIZE = 20;
-const PROJECTILE_SIZE = 5;
+const PROJECTILE_SIZE = 8;
 const SHOT_COOLDOWN = 3000;
 const MAX_SHOTS = 5;
 const AI_UPDATE_INTERVAL = 300;
 const AI_SIGHT_RANGE = 300;
-const AI_SHOT_CHANCE = 0.7;
-const AI_MOVEMENT_SPEED = 2;
+const AI_SHOT_CHANCE = 0.6;
+const AI_MOVEMENT_SPEED = 3;
+const AI_BOT_COUNT = 3;
 
 interface Projectile {
   x: number;
@@ -123,6 +125,7 @@ export function Game() {
   const [isSingleplayer, setIsSingleplayer] = useState(false);
   const [showShareLink, setShowShareLink] = useState(false);
   const [fps, setFps] = useState(0);
+  const [showShareDialog, setShowShareDialog] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [tutorialStep, setTutorialStep] = useState(0);
   const [gameSettings, setGameSettings] = useState<GameSettings>({
@@ -326,7 +329,7 @@ export function Game() {
           const x = Math.random() * (CANVAS_WIDTH - PLAYER_SIZE * 2) + PLAYER_SIZE;
           const y = Math.random() * (CANVAS_HEIGHT - PLAYER_SIZE * 2) + PLAYER_SIZE;
           updatePlayer(playerId, { id: playerId, x, y, health: 100, username: 'You' });
-          initializeAIOpponents(3);
+          initializeAIOpponents(AI_BOT_COUNT);
           setGameState('playing');
 
           // Add welcome notification
@@ -426,27 +429,43 @@ export function Game() {
   };
 
   const initializeAIOpponents = (count: number) => {
+    // Remove any existing AI opponents first
+    for (const [playerId, player] of players.entries()) {
+      if (player.isAI) removePlayer(playerId);
+    }
+
+    // Add new AI opponents
     for (let i = 0; i < count; i++) {
       const aiId = 'ai_' + Math.random().toString(36).substring(2, 9);
-      const x = Math.random() * (CANVAS_WIDTH - PLAYER_SIZE * 2) + PLAYER_SIZE;
-      const y = Math.random() * (CANVAS_HEIGHT - PLAYER_SIZE * 2) + PLAYER_SIZE;
+      // Spread out the initial positions to avoid clustering
+      const x = Math.max(50, Math.min(CANVAS_WIDTH - 50,
+        Math.random() * CANVAS_WIDTH * 0.8 + (i * CANVAS_WIDTH * 0.2 / count)));
+      const y = Math.max(50, Math.min(CANVAS_HEIGHT - 50,
+        Math.random() * CANVAS_HEIGHT * 0.8 + (i * CANVAS_HEIGHT * 0.2 / count)));
+
+      // Random initial movement direction
+      const angle = Math.random() * Math.PI * 2;
       const movementDirection = {
-        x: Math.random() * 2 - 1,
-        y: Math.random() * 2 - 1,
+        x: Math.cos(angle),
+        y: Math.sin(angle),
       };
-      const length = Math.sqrt(movementDirection.x * movementDirection.x + movementDirection.y * movementDirection.y);
-      if (length > 0) {
-        movementDirection.x /= length;
-        movementDirection.y /= length;
-      }
+
+      // Create with unique names and random colors
+      const botNames = ["SniperBot", "ZigZagBot", "PredatorBot", "NinjaBot", "AssassinBot"];
       updatePlayer(aiId, {
         id: aiId,
         x,
         y,
         health: 100,
-        username: `Bot ${i + 1}`,
+        username: botNames[i % botNames.length],
         isAI: true,
-        aiState: { targetX: x, targetY: y, lastShotTime: 0, movementDirection, changeDirCounter: 0 },
+        aiState: {
+          targetX: x,
+          targetY: y,
+          lastShotTime: 0,
+          movementDirection,
+          changeDirCounter: 0
+        },
       });
     }
   };
@@ -527,32 +546,41 @@ export function Game() {
     players.forEach((playerValue, playerId) => {
       // Type assertion
       const player = playerValue as unknown as GamePlayer;
-      
-      // Now use player instead of the original value
+
+      // Skip if not an AI, or if AI is dead
       if (!player.isAI || player.health <= 0 || !player.aiState) return;
-    
+
       const aiState = player.aiState;
       const distToPlayer = Math.hypot(currentPlayer.x - player.x, currentPlayer.y - player.y);
+      const currentTime = performance.now();
 
+      // AI behavior is different based on distance to player
       if (distToPlayer < AI_SIGHT_RANGE) {
+        // Within sight range - react to player
         const dirX = currentPlayer.x - player.x;
         const dirY = currentPlayer.y - player.y;
         const length = Math.sqrt(dirX * dirX + dirY * dirY);
         const normalizedDirX = length > 0 ? dirX / length : 0;
         const normalizedDirY = length > 0 ? dirY / length : 0;
 
-        const randomFactor = 0.3;
+        // Add some randomness to movement
+        const randomFactor = 0.4;
         aiState.movementDirection = {
           x: normalizedDirX + (Math.random() * 2 - 1) * randomFactor,
           y: normalizedDirY + (Math.random() * 2 - 1) * randomFactor
         };
-        const newLength = Math.sqrt(aiState.movementDirection.x * aiState.movementDirection.x + aiState.movementDirection.y * aiState.movementDirection.y);
+
+        // Normalize the direction
+        const newLength = Math.sqrt(
+          aiState.movementDirection.x * aiState.movementDirection.x +
+          aiState.movementDirection.y * aiState.movementDirection.y
+        );
         if (newLength > 0) {
           aiState.movementDirection.x /= newLength;
           aiState.movementDirection.y /= newLength;
         }
 
-        const currentTime = performance.now();
+        // Shoot at player with some random spread
         const timeSinceLastShot = currentTime - aiState.lastShotTime;
         if (timeSinceLastShot > SHOT_COOLDOWN && Math.random() < AI_SHOT_CHANCE) {
           const spreadFactor = 0.2;
@@ -575,26 +603,90 @@ export function Game() {
               size: PROJECTILE_SIZE,
               color: '#FF0000',
               trail: [],
-              timeCreated: performance.now()
+              timeCreated: currentTime
             }
           ]);
           aiState.lastShotTime = currentTime;
         }
       } else {
+        // Random movement patterns when not near player
         aiState.changeDirCounter++;
-        if (aiState.changeDirCounter >= 5) {
+
+        // Change direction more frequently to make movement more dynamic
+        if (aiState.changeDirCounter >= 4) {
           aiState.changeDirCounter = 0;
+
+          // Sometimes move toward center of map to avoid getting stuck in corners
+          if (Math.random() < 0.3) {
+            const centerX = CANVAS_WIDTH / 2;
+            const centerY = CANVAS_HEIGHT / 2;
+            const toCenter = {
+              x: centerX - player.x,
+              y: centerY - player.y
+            };
+            const dist = Math.sqrt(toCenter.x * toCenter.x + toCenter.y * toCenter.y);
+            if (dist > 0) {
+              aiState.movementDirection = {
+                x: toCenter.x / dist,
+                y: toCenter.y / dist
+              };
+            }
+          } else {
+            // Otherwise move in a random direction
+            const randomAngle = Math.random() * Math.PI * 2;
+            aiState.movementDirection = {
+              x: Math.cos(randomAngle),
+              y: Math.sin(randomAngle)
+            };
+          }
+        }
+
+        const timeSinceLastShot = performance.now() - aiState.lastShotTime;
+
+        // Occasionally shoot in random directions even when player is not in sight
+        if (timeSinceLastShot > SHOT_COOLDOWN * 1.5 && Math.random() < 0.1) {
           const randomAngle = Math.random() * Math.PI * 2;
-          aiState.movementDirection = { x: Math.cos(randomAngle), y: Math.sin(randomAngle) };
+          const velocityX = 5 * Math.cos(randomAngle);
+          const velocityY = 5 * Math.sin(randomAngle);
+
+          setProjectiles(prev => [
+            ...prev,
+            {
+              x: player.x,
+              y: player.y,
+              dx: velocityX,
+              dy: velocityY,
+              playerId,
+              size: PROJECTILE_SIZE,
+              color: '#FF0000',
+              trail: [],
+              timeCreated: currentTime
+            }
+          ]);
+          aiState.lastShotTime = currentTime;
         }
       }
 
+      // Move the AI bot
       const moveSpeed = AI_MOVEMENT_SPEED;
       let newX = player.x + aiState.movementDirection.x * moveSpeed;
       let newY = player.y + aiState.movementDirection.y * moveSpeed;
-      newX = Math.max(PLAYER_SIZE, Math.min(CANVAS_WIDTH - PLAYER_SIZE, newX));
-      newY = Math.max(PLAYER_SIZE, Math.min(CANVAS_HEIGHT - PLAYER_SIZE, newY));
-      updatePlayer(playerId, { x: newX, y: newY, aiState: { ...aiState, targetX: newX, targetY: newY } });
+
+      // Bounce off the walls to stay in bounds
+      if (newX < PLAYER_SIZE || newX > CANVAS_WIDTH - PLAYER_SIZE) {
+        aiState.movementDirection.x *= -1;
+        newX = Math.max(PLAYER_SIZE, Math.min(CANVAS_WIDTH - PLAYER_SIZE, newX));
+      }
+      if (newY < PLAYER_SIZE || newY > CANVAS_HEIGHT - PLAYER_SIZE) {
+        aiState.movementDirection.y *= -1;
+        newY = Math.max(PLAYER_SIZE, Math.min(CANVAS_HEIGHT - PLAYER_SIZE, newY));
+      }
+
+      updatePlayer(playerId, {
+        x: newX,
+        y: newY,
+        aiState: { ...aiState, targetX: newX, targetY: newY }
+      });
     });
   };
 
@@ -812,8 +904,8 @@ export function Game() {
 
         // Draw projectiles based on graphics quality
         updatedProjectiles.forEach(proj => {
-          // Draw trail for high quality
-          if (gameSettings.graphicsQuality === 'high' && proj.trail.length > 1) {
+          // Draw trail for high and medium quality
+          if ((gameSettings.graphicsQuality === 'high' || gameSettings.graphicsQuality === 'medium') && proj.trail.length > 1) {
             ctx.beginPath();
             ctx.moveTo(proj.x, proj.y);
 
@@ -821,26 +913,38 @@ export function Game() {
               ctx.lineTo(proj.trail[i].x, proj.trail[i].y);
             }
 
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-            ctx.lineWidth = 2;
+            // Make trail glow effect more visible
+            ctx.strokeStyle = proj.playerId === currentUserId ? 'rgba(76, 175, 80, 0.6)' : 'rgba(255, 85, 85, 0.6)';
+            ctx.lineWidth = 3;
             ctx.stroke();
           }
 
-          // Draw projectile
+          // Draw projectile with larger size
           ctx.beginPath();
           ctx.arc(proj.x, proj.y, proj.size, 0, Math.PI * 2);
-          ctx.fillStyle = proj.playerId === currentUserId ? '#4CAF50' : '#FF5555';
+
+          // Brighter colors for better visibility
+          if (proj.playerId === currentUserId) {
+            // Player projectiles: bright green with gradient
+            const gradient = ctx.createRadialGradient(proj.x, proj.y, 0, proj.x, proj.y, proj.size);
+            gradient.addColorStop(0, '#AAFFAA');
+            gradient.addColorStop(1, '#4CAF50');
+            ctx.fillStyle = gradient;
+          } else {
+            // Enemy projectiles: bright red with gradient
+            const gradient = ctx.createRadialGradient(proj.x, proj.y, 0, proj.x, proj.y, proj.size);
+            gradient.addColorStop(0, '#FFAAAA');
+            gradient.addColorStop(1, '#FF5555');
+            ctx.fillStyle = gradient;
+          }
           ctx.fill();
 
-          // Draw glow for high quality
-          if (gameSettings.graphicsQuality === 'high') {
-            ctx.beginPath();
-            ctx.arc(proj.x, proj.y, proj.size + 2, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-            ctx.fill();
-          }
+          // Draw glow for all quality levels
+          ctx.beginPath();
+          ctx.arc(proj.x, proj.y, proj.size + 4, 0, Math.PI * 2);
+          ctx.fillStyle = proj.playerId === currentUserId ? 'rgba(76, 175, 80, 0.3)' : 'rgba(255, 85, 85, 0.3)';
+          ctx.fill();
         });
-
         return updatedProjectiles;
       });
 
@@ -1284,7 +1388,7 @@ export function Game() {
         if (player.isAI) removePlayer(playerId);
       }
 
-      initializeAIOpponents(3);
+      initializeAIOpponents(AI_BOT_COUNT);
       setGameState('playing');
       setProjectiles([]);
       setParticles([]);
@@ -1313,19 +1417,6 @@ export function Game() {
     }
   };
 
-  const copyShareLink = () => {
-    const shareLink = `${window.location.origin}/game/${id}`;
-    navigator.clipboard.writeText(shareLink).then(
-      () => {
-        addNotification("Game link copied to clipboard!", "#4CAF50", 3000);
-      },
-      () => {
-        addNotification("Failed to copy link", "#F44336", 3000);
-      }
-    );
-    setShowShareLink(false);
-  };
-
   const handleCloseTutorial = () => {
     setShowTutorial(false);
     setTutorialStep(0);
@@ -1351,6 +1442,10 @@ export function Game() {
     );
   }
 
+  const handleShareGame = () => {
+    setShowShareDialog(true);
+  };
+  
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 p-4" tabIndex={0}>
       <div className="relative">
@@ -1362,8 +1457,8 @@ export function Game() {
           className="bg-gray-800 rounded-lg shadow-2xl border border-gray-700"
         />
 
-{/* Game Info Overlay */}
-<div className="absolute top-4 right-4 bg-black bg-opacity-50 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg">
+        {/* Game Info Overlay */}
+        <div className="absolute top-4 right-4 bg-black bg-opacity-50 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg">
           <div className="w-2 h-2 rounded-full bg-green-500"></div>
           <span>
             {isSingleplayer ? 'Singleplayer' : `${Array.from(players.values()).filter(p => p.health > 0).length} Players`}
@@ -1382,36 +1477,38 @@ export function Game() {
         {/* Exit Button */}
         <button
           onClick={handleReturnToLobby}
-          className="absolute top-16 left-4 bg-red-600 text-white p-1 rounded-full shadow-lg hover:bg-red-700 transition-colors"
+          className="absolute top-16 left-4 bg-red-600 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg hover:bg-red-700 transition-colors"
           title="Exit Game"
         >
-          <LogOut size={20} />
+          <LogOut size={18} />
+          <span>Exit Game</span>
         </button>
+
+        {/* Share Game Modal */}
+        {showShareDialog && !isSingleplayer && (
+          <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
+            <div className="max-w-md w-full">
+              <ShareGame
+                roomCode={id || ''}
+                gameLink={`${window.location.origin}/game/${id}`}
+                onClose={() => setShowShareDialog(false)}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Share Game Button (only for hosts in waiting state) */}
         {showShareLink && !isSingleplayer && (
-          <div className="absolute top-16 right-4 bg-indigo-600 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg cursor-pointer hover:bg-indigo-700 transition-colors"
-            onClick={() => {
-              const shareGameModal = document.createElement('div');
-              shareGameModal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50';
-              shareGameModal.innerHTML = `
-                <div class="max-w-md w-full" id="shareGameContainer"></div>
-              `;
-              document.body.appendChild(shareGameModal);
-              
-              // Close modal when clicking outside
-              shareGameModal.addEventListener('click', (e) => {
-                if (e.target === shareGameModal) {
-                  document.body.removeChild(shareGameModal);
-                }
-              });
-            }}
+          <button
+            onClick={handleShareGame}
+            className="absolute top-16 right-4 bg-indigo-600 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg cursor-pointer hover:bg-indigo-700 transition-colors"
           >
             <Share2 size={16} />
             <span>Share Game</span>
-          </div>
+          </button>
         )}
-        
+
+
         {/* Game Over Overlay */}
         {gameState === 'finished' && (
           <div className="absolute inset-0 bg-black bg-opacity-70 flex flex-col items-center justify-center rounded-lg">
@@ -1500,8 +1597,8 @@ export function Game() {
                 <button
                   onClick={() => setTutorialStep(Math.max(0, tutorialStep - 1))}
                   className={`px-4 py-2 rounded-lg ${tutorialStep === 0
-                      ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                      : 'bg-gray-700 text-white hover:bg-gray-600'
+                    ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                    : 'bg-gray-700 text-white hover:bg-gray-600'
                     } transition-colors`}
                   disabled={tutorialStep === 0}
                 >
