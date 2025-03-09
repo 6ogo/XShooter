@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { ArrowLeft, Trophy, Medal, Search, User, ArrowUp, Filter, Loader2 } from 'lucide-react';
+import { ArrowLeft, Trophy, Medal, Search, User, ArrowUp, Filter, Loader2, Zap } from 'lucide-react';
 import { Layout } from './Layout';
 import { Avatar } from './Avatar';
 
@@ -17,10 +17,12 @@ interface LeaderboardEntry {
   games_played: number;
   accuracy: number;
   kd_ratio: number;
+  current_win_streak?: number;
+  max_win_streak?: number;
 }
 
 interface LeaderboardFilter {
-  type: 'wins' | 'total_kills' | 'accuracy' | 'games_played' | 'kd_ratio';
+  type: 'wins' | 'total_kills' | 'accuracy' | 'games_played' | 'kd_ratio' | 'current_win_streak';
   label: string;
   icon: JSX.Element;
 }
@@ -43,7 +45,8 @@ export function Leaderboard() {
     { type: 'total_kills', label: 'Kills', icon: <Medal className="h-4 w-4" /> },
     { type: 'accuracy', label: 'Accuracy', icon: <ArrowUp className="h-4 w-4" /> },
     { type: 'games_played', label: 'Games', icon: <Filter className="h-4 w-4" /> },
-    { type: 'kd_ratio', label: 'K/D Ratio', icon: <ArrowUp className="h-4 w-4" /> }
+    { type: 'kd_ratio', label: 'K/D Ratio', icon: <ArrowUp className="h-4 w-4" /> },
+    { type: 'current_win_streak', label: 'Win Streak', icon: <Zap className="h-4 w-4" /> } // Add this
   ];
 
   useEffect(() => {
@@ -53,139 +56,167 @@ export function Leaderboard() {
         setCurrentUserId(user.id);
       }
     };
-    
+
     checkAuth();
-    
+
     const fetchLeaderboard = async () => {
       setLoading(true);
-      
+
       try {
-        // Get all required data
+        // Get all required data from leaderboard
         const { data: leaderboardData, error: leaderboardError } = await supabase
           .from('leaderboard')
           .select('*')
-          .order(currentFilter.type, { ascending: false })
+          .order(currentFilter.type === 'current_win_streak' ? 'id' : currentFilter.type, { ascending: false }) // Default ordering
           .limit(50);
-          
+
         if (leaderboardError) throw leaderboardError;
-        
+
         if (leaderboardData) {
-          // Get user profiles to add usernames and avatars
-          const playerIds = leaderboardData.map((p) => p.player_id);
-          
-          if (playerIds.length === 0) {
-            setLeaderboard([]);
-            setLoading(false);
-            return;
-          }
-          
-          const { data: profiles, error: profilesError } = await supabase
-            .from('profiles')
-            .select('id, username')
-            .in('id', playerIds);
-            
-          if (profilesError) throw profilesError;
-          
-          // Get user metadata to extract avatar URLs and Twitter handles
-          const { data: { users } } = await supabase.auth.admin.listUsers({
-            perPage: 1000,
-          }).catch(() => {
-            // Fallback if admin functions are not available
-            return { data: { users: [] }, error: null };
-          });
-          
+          // Extract player IDs to fetch their stats
+          const playerIds = leaderboardData.map(entry => entry.player_id);
+
+          // Get player stats for win streaks
+          const { data: playerStatsData } = await supabase
+            .from('player_stats')
+            .select('player_id, current_win_streak, max_win_streak')
+            .in('player_id', playerIds);
+
           // Create a map for easier lookups
-          const profileMap = new Map();
-          profiles?.forEach(profile => {
-            profileMap.set(profile.id, { username: profile.username });
-          });
-          
-          // Add user metadata if available
-          if (users && users.length > 0) {
-            users.forEach(user => {
-              if (profileMap.has(user.id)) {
-                const profileData = profileMap.get(user.id);
-                profileMap.set(user.id, {
-                  ...profileData,
-                  avatar_url: user.user_metadata?.avatar_url,
-                  twitter_handle: user.user_metadata?.preferred_username
-                });
-              }
+          const playerStatsMap = new Map();
+          if (playerStatsData) {
+            playerStatsData.forEach(stat => {
+              playerStatsMap.set(stat.player_id, {
+                current_win_streak: stat.current_win_streak || 0,
+                max_win_streak: stat.max_win_streak || 0
+              });
             });
           }
-          
-          // Process leaderboard data
-          const processedData = leaderboardData.map((entry) => {
-            const profile = profileMap.get(entry.player_id) || { username: 'Unknown Player' };
-            
-            // Calculate derived stats
-            const accuracy = entry.total_shots > 0
-              ? (entry.shots_hit / entry.total_shots) * 100
-              : 0;
-              
-            // Calculate K/D ratio - deaths are approximated by games_played - wins
-            const deaths = Math.max(1, entry.games_played - entry.wins); // Avoid division by zero
-            const kdRatio = entry.total_kills / deaths;
-            
-            return {
-              id: entry.player_id,
-              username: profile.username,
-              avatar_url: profile.avatar_url,
-              twitter_handle: profile.twitter_handle,
-              wins: entry.wins,
-              total_kills: entry.total_kills,
-              total_shots: entry.total_shots,
-              shots_hit: entry.shots_hit,
-              games_played: entry.games_played,
-              accuracy: accuracy,
-              kd_ratio: kdRatio
-            };
-          });
-          
-          // Sort data by the current filter
-          processedData.sort((a, b) => b[currentFilter.type] - a[currentFilter.type]);
-          
-          setLeaderboard(processedData);
-          
-          // Find current user's rank
-          if (currentUserId) {
-            const userEntry = processedData.find(entry => entry.id === currentUserId);
-            if (userEntry) {
-              setUserRank(userEntry);
-            } else {
-              // Get user's stats directly if not in top 50
-              const { data: userStats } = await supabase
-                .from('leaderboard')
-                .select('*')
-                .eq('player_id', currentUserId)
-                .single();
-                
-              if (userStats) {
-                const { data: userProfile } = await supabase
-                  .from('profiles')
-                  .select('username')
-                  .eq('id', currentUserId)
-                  .single();
-                  
-                if (userProfile) {
-                  const accuracy = userStats.total_shots > 0
-                    ? (userStats.shots_hit / userStats.total_shots) * 100
-                    : 0;
-                    
-                  const deaths = Math.max(1, userStats.games_played - userStats.wins);
-                  const kdRatio = userStats.total_kills / deaths;
-                  
-                  setUserRank({
-                    id: currentUserId,
-                    username: userProfile.username,
-                    wins: userStats.wins,
-                    total_kills: userStats.total_kills,
-                    total_shots: userStats.total_shots,
-                    shots_hit: userStats.shots_hit,
-                    games_played: userStats.games_played,
-                    accuracy: accuracy,
-                    kd_ratio: kdRatio
+
+          if (leaderboardData) {
+            // Get user profiles to add usernames and avatars
+            const playerIds = leaderboardData.map((p) => p.player_id);
+
+            if (playerIds.length === 0) {
+              setLeaderboard([]);
+              setLoading(false);
+              return;
+            }
+
+            const { data: profiles, error: profilesError } = await supabase
+              .from('profiles')
+              .select('id, username')
+              .in('id', playerIds);
+
+            if (profilesError) throw profilesError;
+
+            // Get user metadata to extract avatar URLs and Twitter handles
+            const { data: { users } } = await supabase.auth.admin.listUsers({
+              perPage: 1000,
+            }).catch(() => {
+              // Fallback if admin functions are not available
+              return { data: { users: [] }, error: null };
+            });
+
+            // Create a map for easier lookups
+            const profileMap = new Map();
+            profiles?.forEach(profile => {
+              profileMap.set(profile.id, { username: profile.username });
+            });
+
+            // Add user metadata if available
+            if (users && users.length > 0) {
+              users.forEach(user => {
+                if (profileMap.has(user.id)) {
+                  const profileData = profileMap.get(user.id);
+                  profileMap.set(user.id, {
+                    ...profileData,
+                    avatar_url: user.user_metadata?.avatar_url,
+                    twitter_handle: user.user_metadata?.preferred_username
                   });
+                }
+              });
+            }
+
+            // Process leaderboard data with win streaks
+            const processedData = leaderboardData.map((entry) => {
+              const profile = profileMap.get(entry.player_id) || { username: 'Unknown Player' };
+
+              // Calculate derived stats as before
+              const accuracy = entry.total_shots > 0
+                ? (entry.shots_hit / entry.total_shots) * 100
+                : 0;
+
+              const deaths = Math.max(1, entry.games_played - entry.wins);
+              const kdRatio = entry.total_kills / deaths;
+
+              // Add win streak data
+              const playerStat = playerStatsMap.get(entry.player_id);
+
+              return {
+                id: entry.player_id,
+                username: profile.username,
+                avatar_url: profile.avatar_url,
+                twitter_handle: profile.twitter_handle,
+                wins: entry.wins,
+                total_kills: entry.total_kills,
+                total_shots: entry.total_shots,
+                shots_hit: entry.shots_hit,
+                games_played: entry.games_played,
+                accuracy: accuracy,
+                kd_ratio: kdRatio,
+                current_win_streak: playerStat?.current_win_streak || 0,
+                max_win_streak: playerStat?.max_win_streak || 0
+              };
+            });
+
+            // Special sort if we're sorting by win streak
+            if (currentFilter.type === 'current_win_streak') {
+              processedData.sort((a, b) => (b.current_win_streak || 0) - (a.current_win_streak || 0));
+            }
+
+            setLeaderboard(processedData);
+
+            // Find current user's rank
+            if (currentUserId) {
+              const userEntry = processedData.find(entry => entry.id === currentUserId);
+              if (userEntry) {
+                setUserRank(userEntry);
+              } else {
+                // Get user's stats directly if not in top 50
+                const { data: userStats } = await supabase
+                  .from('leaderboard')
+                  .select('*')
+                  .eq('player_id', currentUserId)
+                  .single();
+
+                if (userStats) {
+                  const { data: userProfile } = await supabase
+                    .from('profiles')
+                    .select('username')
+                    .eq('id', currentUserId)
+                    .single();
+
+                  if (userProfile) {
+                    const accuracy = userStats.total_shots > 0
+                      ? (userStats.shots_hit / userStats.total_shots) * 100
+                      : 0;
+
+                    const deaths = Math.max(1, userStats.games_played - userStats.wins);
+                    const kdRatio = userStats.total_kills / deaths;
+
+                    setUserRank({
+                      id: currentUserId,
+                      username: userProfile.username,
+                      wins: userStats.wins,
+                      total_kills: userStats.total_kills,
+                      total_shots: userStats.total_shots,
+                      shots_hit: userStats.shots_hit,
+                      games_played: userStats.games_played,
+                      accuracy: accuracy,
+                      kd_ratio: kdRatio
+                    });
+                  }
                 }
               }
             }
@@ -206,8 +237,8 @@ export function Leaderboard() {
   };
 
   const filteredLeaderboard = searchTerm
-    ? leaderboard.filter(entry => 
-        entry.username.toLowerCase().includes(searchTerm.toLowerCase()))
+    ? leaderboard.filter(entry =>
+      entry.username.toLowerCase().includes(searchTerm.toLowerCase()))
     : leaderboard;
 
   const getRankColor = (rank: number) => {
@@ -230,7 +261,7 @@ export function Leaderboard() {
         <div className="max-w-6xl mx-auto">
           <div className="flex justify-between items-center mb-8">
             <div className="flex items-center gap-3">
-              <button 
+              <button
                 onClick={() => navigate('/game/lobby')}
                 className="bg-gray-800 hover:bg-gray-700 text-white p-2 rounded-full transition-colors"
               >
@@ -238,7 +269,7 @@ export function Leaderboard() {
               </button>
               <h1 className="text-3xl font-bold text-white">Leaderboard</h1>
             </div>
-            
+
             <div className="relative">
               <input
                 type="text"
@@ -250,25 +281,24 @@ export function Leaderboard() {
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
             </div>
           </div>
-          
+
           {/* Filter tabs */}
           <div className="flex mb-6 overflow-x-auto pb-2">
             {filters.map((filter) => (
               <button
                 key={filter.type}
                 onClick={() => handleFilterChange(filter)}
-                className={`px-4 py-2 rounded-lg mr-2 flex items-center ${
-                  currentFilter.type === filter.type
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                } transition-colors whitespace-nowrap`}
+                className={`px-4 py-2 rounded-lg mr-2 flex items-center ${currentFilter.type === filter.type
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                  } transition-colors whitespace-nowrap`}
               >
                 {filter.icon}
                 <span className="ml-2">{filter.label}</span>
               </button>
             ))}
           </div>
-          
+
           {loading ? (
             <div className="flex flex-col items-center justify-center py-12">
               <Loader2 className="h-10 w-10 text-indigo-500 animate-spin mb-4" />
@@ -300,7 +330,7 @@ export function Leaderboard() {
                         Accuracy
                       </th>
                       <th className="px-6 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider text-right">
-                        Games
+                        Streak
                       </th>
                     </tr>
                   </thead>
@@ -310,9 +340,8 @@ export function Leaderboard() {
                       return (
                         <tr
                           key={entry.id}
-                          className={`border-b border-gray-700 ${
-                            isCurrentUser ? 'bg-indigo-900/30' : (index % 2 === 0 ? 'bg-gray-750' : 'bg-gray-800')
-                          } hover:bg-gray-700 transition-colors`}
+                          className={`border-b border-gray-700 ${isCurrentUser ? 'bg-indigo-900/30' : (index % 2 === 0 ? 'bg-gray-750' : 'bg-gray-800')
+                            } hover:bg-gray-700 transition-colors`}
                         >
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="flex items-center justify-center">
@@ -367,15 +396,29 @@ export function Leaderboard() {
                           <td className="px-6 py-4 whitespace-nowrap text-right text-gray-300">
                             {entry.games_played}
                           </td>
+                          {/* Win Streak column */}
+                          <td className="px-6 py-4 whitespace-nowrap text-right">
+                            {(entry.current_win_streak ?? 0) > 0 ? (
+                              <span className={`px-2 py-0.5 rounded-full inline-flex items-center ${(entry.current_win_streak ?? 0) >= 3
+                                ? 'bg-gradient-to-r from-yellow-500 to-yellow-700 text-white'
+                                : 'bg-gray-700 text-gray-300'
+                                }`}>
+                                {entry.current_win_streak}🏆
+                              </span>
+                            ) : (
+                              <span className="text-gray-500">-</span>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
+
               </div>
             </div>
           )}
-          
+
           {/* User Stats Card */}
           {!loading && userRank && !searchTerm && (
             <div className="mt-8 bg-gray-800 rounded-lg shadow-xl p-6 border border-gray-700">
@@ -383,29 +426,29 @@ export function Leaderboard() {
                 <User className="mr-2 h-5 w-5 text-indigo-400" />
                 Your Stats
               </h2>
-              
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
                 <div className="bg-gray-750 rounded-lg p-4 border border-gray-700">
                   <p className="text-gray-400 text-sm mb-1 flex items-center">
                     <Trophy className="h-4 w-4 mr-1 text-yellow-500" /> Wins
                   </p>
                   <p className="text-white text-2xl font-bold">{userRank.wins}</p>
                 </div>
-                
+
                 <div className="bg-gray-750 rounded-lg p-4 border border-gray-700">
                   <p className="text-gray-400 text-sm mb-1 flex items-center">
                     <Medal className="h-4 w-4 mr-1 text-red-500" /> Kills
                   </p>
                   <p className="text-white text-2xl font-bold">{userRank.total_kills}</p>
                 </div>
-                
+
                 <div className="bg-gray-750 rounded-lg p-4 border border-gray-700">
                   <p className="text-gray-400 text-sm mb-1 flex items-center">
                     <ArrowUp className="h-4 w-4 mr-1 text-green-500" /> Accuracy
                   </p>
                   <p className="text-white text-2xl font-bold">{userRank.accuracy.toFixed(1)}%</p>
                 </div>
-                
+
                 <div className="bg-gray-750 rounded-lg p-4 border border-gray-700">
                   <p className="text-gray-400 text-sm mb-1 flex items-center">
                     <Filter className="h-4 w-4 mr-1 text-blue-500" /> K/D Ratio
@@ -413,7 +456,21 @@ export function Leaderboard() {
                   <p className="text-white text-2xl font-bold">{userRank.kd_ratio.toFixed(2)}</p>
                 </div>
               </div>
-              
+              {/* New Win Streak card */}
+              <div className="bg-gray-750 rounded-lg p-4 border border-gray-700">
+                <p className="text-gray-400 text-sm mb-1 flex items-center">
+                  <Zap className="h-4 w-4 mr-1 text-yellow-500" /> Win Streak
+                </p>
+                <div className="flex justify-between items-center">
+                  <p className="text-white text-xl font-bold">{userRank?.current_win_streak || 0}</p>
+                  {(userRank?.max_win_streak ?? 0) > 0 && (
+                    <span className="text-gray-400 text-xs">
+                      Best: {userRank.max_win_streak}
+                    </span>
+                  )}
+                </div>
+              </div>
+
               <div className="mt-4 py-3 px-4 bg-indigo-900/30 rounded-lg">
                 <p className="text-indigo-300 text-sm flex items-center">
                   <Trophy className="h-4 w-4 mr-2" />

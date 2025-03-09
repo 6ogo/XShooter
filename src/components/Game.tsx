@@ -122,7 +122,8 @@ export function Game() {
   const [particles, setParticles] = useState<ParticleEffect[]>([]);
   const [damageNumbers, setDamageNumbers] = useState<DamageNumber[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
-
+  const [playerWinStreaks, setPlayerWinStreaks] = useState<Map<string, number>>(new Map());
+  const [highestStreakValue, setHighestStreakValue] = useState<number>(0);
   const [shotCount, setShotCount] = useState(0);
   const [canShoot, setCanShoot] = useState(true);
   const [gameState, setGameState] = useState<'loading' | 'waiting' | 'playing' | 'finished'>('loading');
@@ -240,6 +241,54 @@ export function Game() {
       console.log(`Game session lasted ${Math.round(sessionTime / 1000)} seconds`);
     };
   }, [gameSettings.showTutorialOnStart]);
+
+  // Add this useEffect to fetch all player stats when the game starts
+  useEffect(() => {
+    const fetchPlayerStats = async () => {
+      if (!players.size || gameState !== 'playing') return;
+
+      try {
+        // Get all player IDs except AI
+        const playerIds = Array.from(players.entries())
+          .filter(([_, player]) => !player.isAI)
+          .map(([id]) => id);
+
+        if (playerIds.length === 0) return;
+
+        // Fetch win streaks for all players
+        const { data, error } = await supabase
+          .from('player_stats')
+          .select('player_id, current_win_streak')
+          .in('player_id', playerIds);
+
+        if (error) throw error;
+
+        // Create a map of player ID to win streak
+        const streaksMap = new Map<string, number>();
+        let maxStreak = 0;
+
+        // Initialize with zero for all players
+        playerIds.forEach(id => streaksMap.set(id, 0));
+
+        // Update with actual streak values
+        if (data) {
+          data.forEach(stat => {
+            const streak = stat.current_win_streak || 0;
+            streaksMap.set(stat.player_id, streak);
+            if (streak > maxStreak) maxStreak = streak;
+          });
+        }
+
+        setPlayerWinStreaks(streaksMap);
+        setHighestStreakValue(maxStreak);
+
+      } catch (error) {
+        console.error('Error fetching player win streaks:', error);
+      }
+    };
+
+    fetchPlayerStats();
+  }, [players, gameState]);
 
   // Keyboard input handling
   useEffect(() => {
@@ -1143,6 +1192,11 @@ export function Game() {
       players.forEach((player) => {
         if (player.health <= 0) return;
 
+        // Check if player has the highest win streak (and it's greater than 0)
+        const hasHighestStreak = !player.isAI &&
+          highestStreakValue > 0 &&
+          playerWinStreaks.get(player.id) === highestStreakValue;
+
         // Draw player hit effect (enhanced)
         if (player.lastHitTime && performance.now() - player.lastHitTime < HIT_EFFECT_DURATION) {
           const effectProgress = 1 - ((performance.now() - player.lastHitTime) / HIT_EFFECT_DURATION);
@@ -1161,44 +1215,58 @@ export function Game() {
           ctx.fill();
         }
 
-        // Draw movement trail for better visual feedback
-        if (player.velocity && gameSettings.graphicsQuality !== 'low' &&
-          (Math.abs(player.velocity.x) > 0.5 || Math.abs(player.velocity.y) > 0.5)) {
-          const trailLength = gameSettings.graphicsQuality === 'high' ? 3 : 2;
-          const speed = Math.sqrt(player.velocity.x ** 2 + player.velocity.y ** 2);
-          const normalizedSpeed = Math.min(speed / PLAYER_MOVEMENT_SPEED, 1);
+        // Draw movement trail (keep your existing movement trail code)
 
-          // Direction opposite to movement
-          const dirX = player.velocity.x !== 0 ? -player.velocity.x / Math.abs(player.velocity.x) : 0;
-          const dirY = player.velocity.y !== 0 ? -player.velocity.y / Math.abs(player.velocity.y) : 0;
+        // Draw gold streak border if applicable
+        if (hasHighestStreak) {
+          // Animated gold streak border
+          const pulseIntensity = (Math.sin(performance.now() / 200) + 1) / 2; // 0 to 1 pulsing
+          const outerSize = PLAYER_SIZE + 4;
+          const glowSize = PLAYER_SIZE + 6 + pulseIntensity * 2;
+
+          // Gold glow
+          const gradient = ctx.createRadialGradient(
+            player.x, player.y, outerSize,
+            player.x, player.y, glowSize
+          );
+          gradient.addColorStop(0, 'rgba(255, 215, 0, 0.8)'); // Gold
+          gradient.addColorStop(1, 'rgba(255, 215, 0, 0)');
 
           ctx.beginPath();
-          ctx.moveTo(player.x, player.y);
-          ctx.lineTo(
-            player.x + dirX * PLAYER_SIZE * normalizedSpeed * trailLength,
-            player.y + dirY * PLAYER_SIZE * normalizedSpeed * trailLength
-          );
+          ctx.arc(player.x, player.y, glowSize, 0, Math.PI * 2);
+          ctx.fillStyle = gradient;
+          ctx.fill();
 
-          // Gradient trail
-          const gradient = ctx.createLinearGradient(
-            player.x, player.y,
-            player.x + dirX * PLAYER_SIZE * normalizedSpeed * trailLength,
-            player.y + dirY * PLAYER_SIZE * normalizedSpeed * trailLength
-          );
-
-          const trailColor = player.id === currentUserId ? 'rgba(76, 175, 80, 0.6)' :
-            player.isAI ? 'rgba(255, 85, 85, 0.6)' : 'rgba(66, 135, 245, 0.6)';
-
-          gradient.addColorStop(0, 'rgba(255, 255, 255, 0)');
-          gradient.addColorStop(1, trailColor);
-
-          ctx.strokeStyle = gradient;
-          ctx.lineWidth = PLAYER_SIZE * 0.8 * normalizedSpeed;
-          ctx.lineCap = 'round';
+          // Solid gold border
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, outerSize, 0, Math.PI * 2);
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = 'rgba(255, 215, 0, 0.9)';
           ctx.stroke();
+
+          // Add streak crown or indicator
+          if (highestStreakValue >= 3) {
+            // Draw a small crown or star above player
+            ctx.fillStyle = '#FFD700'; // Gold
+
+            // Simple crown shapes - adjust as needed
+            const crownY = player.y - PLAYER_SIZE - 15;
+            const crownWidth = 10;
+            const crownHeight = 6;
+
+            ctx.beginPath();
+            ctx.moveTo(player.x - crownWidth / 2, crownY);
+            ctx.lineTo(player.x - crownWidth / 2, crownY - crownHeight);
+            ctx.lineTo(player.x - crownWidth / 3, crownY - crownHeight / 2);
+            ctx.lineTo(player.x, crownY - crownHeight);
+            ctx.lineTo(player.x + crownWidth / 3, crownY - crownHeight / 2);
+            ctx.lineTo(player.x + crownWidth / 2, crownY - crownHeight);
+            ctx.lineTo(player.x + crownWidth / 2, crownY);
+            ctx.fill();
+          }
         }
 
-        // Draw player avatar
+        // Draw player avatar (keep your existing avatar drawing code)
         const avatar = playerAvatars[player.id];
         if (avatar) {
           ctx.save();
@@ -1221,6 +1289,17 @@ export function Game() {
           ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
           ctx.fill();
           loadPlayerAvatar(player);
+        }
+
+        // Draw win streak indicator text
+        const playerStreak = playerWinStreaks.get(player.id) || 0;
+        if (!player.isAI && playerStreak > 0) {
+          ctx.font = '10px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+          ctx.fillText(`${playerStreak}🏆`, player.x, player.y - PLAYER_SIZE - 6);
+          ctx.fillStyle = hasHighestStreak ? '#FFD700' : '#FFFFFF';
+          ctx.fillText(`${playerStreak}🏆`, player.x, player.y - PLAYER_SIZE - 7);
         }
 
         // Draw health bar with improvements
