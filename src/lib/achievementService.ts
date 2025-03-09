@@ -370,10 +370,65 @@ class AchievementService {
   }
   
   private async checkConsecutiveWins(playerId: string, threshold: number): Promise<boolean> {
-    // This would require tracking consecutive wins in a separate field
-    // For simplicity, not fully implemented here
-    return false;
+    try {
+      // Method 1: Check the player_stats table first (most efficient)
+      const { data: playerStats, error: statsError } = await supabase
+        .from('player_stats')
+        .select('current_win_streak, max_win_streak')
+        .eq('player_id', playerId)
+        .single();
+  
+      // If we have stats and either current or max streak meets threshold
+      if (!statsError && playerStats) {
+        if (playerStats.current_win_streak >= threshold || playerStats.max_win_streak >= threshold) {
+          return true;
+        }
+        
+        // If max streak is less than threshold, no need to check game history
+        if (playerStats.max_win_streak < threshold) {
+          return false;
+        }
+      }
+  
+      // Method 2: Fallback to checking game history if needed
+      const { data: recentGames, error: gamesError } = await supabase
+        .from('games')
+        .select('id, status, winner_id, created_at')
+        .or(`winner_id.eq.${playerId},game_players.player_id.eq.${playerId}`)
+        .eq('status', 'finished')
+        .order('created_at', { ascending: false })
+        .limit(threshold * 2); // Get enough games to potentially find a streak
+  
+      if (gamesError || !recentGames || recentGames.length === 0) {
+        // Return false if we can't get game history
+        return false;
+      }
+  
+      // Count consecutive wins
+      let winStreak = 0;
+      
+      // For each finished game the player participated in
+      for (const game of recentGames) {
+        // If player won this game
+        if (game.winner_id === playerId) {
+          winStreak++;
+          if (winStreak >= threshold) {
+            return true;
+          }
+        } else {
+          // Streak broken - player participated but didn't win
+          break;
+        }
+      }
+  
+      return false;
+  
+    } catch (error) {
+      console.error('Error checking consecutive wins:', error);
+      return false;
+    }
   }
+  
   
   private async checkLeaderboardRank(playerId: string, threshold: number): Promise<boolean> {
     const { data: topPlayers } = await supabase

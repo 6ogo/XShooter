@@ -925,7 +925,7 @@ export function Game() {
       });
     });
   }, [createParticleEffect, currentUserId, players, updatePlayer]);
-  
+
   useEffect(() => {
     // Force start the game loop if it's not running in singleplayer mode
     if (isSingleplayer && gameState === 'playing' && !requestAnimationFrameRef.current && gameLoopRef.current) {
@@ -939,68 +939,88 @@ export function Game() {
     setGameState('finished');
     if (!currentUserId || isSingleplayer) return;
 
-    const { data: leaderboardEntry } = await supabase
-      .from('leaderboard')
-      .select('*')
-      .eq('player_id', currentUserId)
-      .single();
+    try {
+      // Update game with winner information
+      if (id && id !== 'singleplayer') {
+        const updates = {
+          status: 'finished',
+          // Only set winner_id if there is a winner (not needed for singleplayer)
+          ...(isWinner ? { winner_id: currentUserId } : {})
+        };
 
-    if (leaderboardEntry) {
-      await supabase
+        await supabase
+          .from('games')
+          .update(updates)
+          .eq('id', id);
+      }
+
+      // Update player stats
+      const { data: leaderboardEntry } = await supabase
         .from('leaderboard')
-        .update({
-          wins: isWinner ? leaderboardEntry.wins + 1 : leaderboardEntry.wins,
-          total_kills: leaderboardEntry.total_kills + gameStats.killCount,
-          total_shots: leaderboardEntry.total_shots + gameStats.shotsFired,
-          shots_hit: leaderboardEntry.shots_hit + gameStats.shotsHit,
-          games_played: leaderboardEntry.games_played + 1
-        })
-        .eq('player_id', currentUserId);
-    }
-
-    if (id && id !== 'singleplayer') {
-      await supabase
-        .from('game_players')
-        .update({ kills: gameStats.killCount, shots_fired: gameStats.shotsFired, shots_hit: gameStats.shotsHit })
-        .eq('game_id', id)
-        .eq('player_id', currentUserId);
-
-      await supabase
-        .from('games')
-        .update({ status: 'finished' })
-        .eq('id', id);
-    }
-
-    const currentPlayer = players.get(currentUserId);
-
-    const gameData: GameCompletionData = {
-      gameId: id || 'singleplayer',
-      playerId: currentUserId,
-      winner: isWinner,
-      killCount: gameStats.killCount,
-      finalHealth: currentPlayer ? currentPlayer.health : 0,
-      damageReceived: gameStats.damageReceived,
-      shotsFired: gameStats.shotsFired,
-      shotsHit: gameStats.shotsHit,
-      accuracy: gameStats.shotsFired > 0 ? (gameStats.shotsHit / gameStats.shotsFired) * 100 : 0,
-      eliminations: gameStats.eliminations,
-      eliminatedAllPlayers: gameStats.eliminations.length === players.size - 1,
-      firstKill: gameStats.firstKill,
-      lastKill: gameStats.lastKill,
-      killedInRow: gameStats.killedInRow,
-      multiKills: gameStats.multiKills,
-      lowestHealth: gameStats.lowestHealth,
-      timeWithLowHealth: lowHealthTimeRef.current
-    };
-
-    const unlockedAchievements = await achievementService.checkGameAchievements(gameData);
-    if (unlockedAchievements.length > 0) {
-      const { data: achievement } = await supabase
-        .from('achievements')
-        .select('name, description')
-        .eq('id', unlockedAchievements[0])
+        .select('*')
+        .eq('player_id', currentUserId)
         .single();
-      if (achievement) setUnlockingAchievement(achievement);
+
+      if (leaderboardEntry) {
+        await supabase
+          .from('leaderboard')
+          .update({
+            wins: isWinner ? leaderboardEntry.wins + 1 : leaderboardEntry.wins,
+            total_kills: leaderboardEntry.total_kills + gameStats.killCount,
+            total_shots: leaderboardEntry.total_shots + gameStats.shotsFired,
+            shots_hit: leaderboardEntry.shots_hit + gameStats.shotsHit,
+            games_played: leaderboardEntry.games_played + 1
+          })
+          .eq('player_id', currentUserId);
+      }
+
+      if (id && id !== 'singleplayer') {
+        await supabase
+          .from('game_players')
+          .update({
+            kills: gameStats.killCount,
+            shots_fired: gameStats.shotsFired,
+            shots_hit: gameStats.shotsHit,
+            // Update player health to reflect final state
+            health: currentUserId && players.get(currentUserId) ? players.get(currentUserId)!.health : 0
+          })
+          .eq('game_id', id)
+          .eq('player_id', currentUserId);
+      }
+
+      const currentPlayer = players.get(currentUserId);
+
+      const gameData: GameCompletionData = {
+        gameId: id || 'singleplayer',
+        playerId: currentUserId,
+        winner: isWinner,
+        killCount: gameStats.killCount,
+        finalHealth: currentPlayer ? currentPlayer.health : 0,
+        damageReceived: gameStats.damageReceived,
+        shotsFired: gameStats.shotsFired,
+        shotsHit: gameStats.shotsHit,
+        accuracy: gameStats.shotsFired > 0 ? (gameStats.shotsHit / gameStats.shotsFired) * 100 : 0,
+        eliminations: gameStats.eliminations,
+        eliminatedAllPlayers: gameStats.eliminations.length === players.size - 1,
+        firstKill: gameStats.firstKill,
+        lastKill: gameStats.lastKill,
+        killedInRow: gameStats.killedInRow,
+        multiKills: gameStats.multiKills,
+        lowestHealth: gameStats.lowestHealth,
+        timeWithLowHealth: lowHealthTimeRef.current
+      };
+
+      const unlockedAchievements = await achievementService.checkGameAchievements(gameData);
+      if (unlockedAchievements.length > 0) {
+        const { data: achievement } = await supabase
+          .from('achievements')
+          .select('name, description')
+          .eq('id', unlockedAchievements[0])
+          .single();
+        if (achievement) setUnlockingAchievement(achievement);
+      }
+    } catch (error) {
+      console.error('Error handling game end:', error);
     }
   }, [currentUserId, gameStats, id, isSingleplayer, players]);
 
