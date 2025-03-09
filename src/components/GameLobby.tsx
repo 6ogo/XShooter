@@ -104,10 +104,17 @@ export function GameLobby() {
   }, []);
 
   const createGame = async () => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      setError('You must be logged in to create a game');
+      return;
+    }
     setCreatingGame(true);
     setError(null);
     try {
+      // Generate a unique room code first
+      const generatedRoomCode = `ROOM-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      
+      // Create the game with the room code directly
       const { data: game, error: gameError } = await supabase
         .from('games')
         .insert({
@@ -115,123 +122,210 @@ export function GameLobby() {
           current_players: 1,
           max_players: 18,
           status: 'waiting',
+          room_code: generatedRoomCode
         })
         .select()
         .single();
 
-      if (gameError) throw gameError;
+      if (gameError) {
+        console.error('Error creating game:', gameError);
+        throw new Error(`Failed to create game: ${gameError.message}`);
+      }
 
-      const generatedRoomCode = `ROOM-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-      await supabase
-        .from('games')
-        .update({ room_code: generatedRoomCode })
-        .eq('id', game.id);
+      if (!game) {
+        throw new Error('Failed to create game - no game data returned');
+      }
 
-      await supabase
+      console.log('Game created:', game);
+
+      // Add the player to the game
+      const { error: playerError } = await supabase
         .from('game_players')
         .insert({
           game_id: game.id,
           player_id: currentUser.id,
-          position_x: 0,
-          position_y: 0,
+          position_x: Math.floor(Math.random() * 700) + 50,  // Random starting position
+          position_y: Math.floor(Math.random() * 500) + 50   // Random starting position
         });
 
+      if (playerError) {
+        console.error('Error adding player to game:', playerError);
+        
+        // Attempt to clean up the created game
+        await supabase.from('games').delete().eq('id', game.id);
+        
+        throw new Error(`Failed to join created game: ${playerError.message}`);
+      }
+
+      // Update local state and navigate
       setGameId(game.id);
       setRoomCodeState(generatedRoomCode);
       setRoomCode(generatedRoomCode);
       setIsHost(true);
       navigate(`/game/${game.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create game');
+      console.error('Create game error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to create game. Please try again.');
     } finally {
       setCreatingGame(false);
     }
   };
 
   const joinGame = async () => {
+    if (!currentUser) {
+      setError('You must be logged in to join a game');
+      return;
+    }
+    
     if (!roomCodeInput) {
       setError('Please enter a room code');
       return;
     }
+    
     setJoiningGame(true);
     setError(null);
+    
     try {
-      const { data: game, error: gameError } = await supabase
+      // Standardize room code format (uppercase)
+      const formattedRoomCode = roomCodeInput.trim().toUpperCase();
+      
+      // Find the game
+      const { data: games, error: gameError } = await supabase
         .from('games')
         .select('*')
-        .eq('room_code', roomCodeInput.toUpperCase())
-        .eq('status', 'waiting')
-        .single();
+        .eq('room_code', formattedRoomCode)
+        .eq('status', 'waiting');
 
-      if (gameError || !game) {
+      if (gameError) {
+        console.error('Error finding game:', gameError);
+        throw new Error(`Failed to find game: ${gameError.message}`);
+      }
+
+      if (!games || games.length === 0) {
         throw new Error('Game not found or has already started');
       }
+
+      const game = games[0];
 
       if (game.current_players >= game.max_players) {
         throw new Error('Game is full');
       }
 
-      await supabase
+      // Check if user is already in this game
+      const { data: existingPlayer } = await supabase
+        .from('game_players')
+        .select('id')
+        .eq('game_id', game.id)
+        .eq('player_id', currentUser.id);
+        
+      if (existingPlayer && existingPlayer.length > 0) {
+        // If already in the game, just navigate there
+        setGameId(game.id);
+        setRoomCode(game.room_code);
+        setIsHost(game.host_id === currentUser.id);
+        navigate(`/game/${game.id}`);
+        return;
+      }
+
+      // Add player to the game
+      const { error: joinError } = await supabase
         .from('game_players')
         .insert({
           game_id: game.id,
           player_id: currentUser.id,
-          position_x: 0,
-          position_y: 0,
+          position_x: Math.floor(Math.random() * 700) + 50,  // Random starting position
+          position_y: Math.floor(Math.random() * 500) + 50   // Random starting position
         });
 
-      await supabase
+      if (joinError) {
+        console.error('Error joining game:', joinError);
+        throw new Error(`Failed to join game: ${joinError.message}`);
+      }
+
+      // Update player count
+      const { error: updateError } = await supabase
         .from('games')
         .update({ current_players: game.current_players + 1 })
         .eq('id', game.id);
 
+      if (updateError) {
+        console.error('Error updating player count:', updateError);
+        // Not a critical error, we can still continue
+      }
+
+      // Update local state and navigate
       setGameId(game.id);
       setRoomCode(game.room_code);
-      setIsHost(false);
+      setIsHost(game.host_id === currentUser.id);
       navigate(`/game/${game.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to join game');
+      console.error('Join game error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to join game. Please try again.');
     } finally {
       setJoiningGame(false);
     }
   };
 
   const joinQuickplay = async () => {
+    if (!currentUser) {
+      setError('You must be logged in to join quickplay');
+      return;
+    }
+    
     setJoiningGame(true);
     setError(null);
+    
     try {
-      const { data: games, error: gamesError } = await supabase
+      // Clean up old empty games first
+      await cleanupEmptyGames();
+      
+      // Find available games
+      const { data: availableGames, error: gamesError } = await supabase
         .from('games')
         .select('*')
         .eq('status', 'waiting')
         .lt('current_players', 'max_players')
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(5);  // Limit to 5 most recent games for performance
 
-      if (gamesError) throw gamesError;
+      if (gamesError) {
+        console.error('Error finding games:', gamesError);
+        throw new Error(`Failed to find available games: ${gamesError.message}`);
+      }
 
       let game;
-      if (games && games.length > 0) {
-        game = games[0];
+      
+      // Try to join an existing game
+      if (availableGames && availableGames.length > 0) {
+        // Pick a random game from available ones to distribute players
+        game = availableGames[Math.floor(Math.random() * availableGames.length)];
         
-        // Check if user is already in this game
+        console.log('Found existing game to join:', game);
+        
+        // Check if already in this game
         const { data: existingPlayer } = await supabase
           .from('game_players')
           .select('id')
           .eq('game_id', game.id)
-          .eq('player_id', currentUser.id)
-          .single();
+          .eq('player_id', currentUser.id);
           
-        if (!existingPlayer) {
+        if (!(existingPlayer && existingPlayer.length > 0)) {
           // Add player to existing game
-          await supabase
+          const { error: joinError } = await supabase
             .from('game_players')
             .insert({
               game_id: game.id,
               player_id: currentUser.id,
-              position_x: 0,
-              position_y: 0,
+              position_x: Math.floor(Math.random() * 700) + 50,
+              position_y: Math.floor(Math.random() * 500) + 50
             });
 
+          if (joinError) {
+            console.error('Error joining existing game:', joinError);
+            throw new Error(`Failed to join game: ${joinError.message}`);
+          }
+
+          // Update player count
           await supabase
             .from('games')
             .update({ current_players: game.current_players + 1 })
@@ -239,6 +333,9 @@ export function GameLobby() {
         }
       } else {
         // Create new game if none available
+        console.log('No available games, creating new one');
+        const quickRoomCode = `QUICK-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+        
         const { data: newGame, error: newGameError } = await supabase
           .from('games')
           .insert({
@@ -246,33 +343,98 @@ export function GameLobby() {
             current_players: 1,
             max_players: 18,
             status: 'waiting',
-            room_code: `QUICK-${Math.random().toString(36).substring(2, 8).toUpperCase()}`
+            room_code: quickRoomCode
           })
           .select()
           .single();
 
-        if (newGameError) throw newGameError;
+        if (newGameError) {
+          console.error('Error creating quickplay game:', newGameError);
+          throw new Error(`Failed to create quickplay game: ${newGameError.message}`);
+        }
+        
+        if (!newGame) {
+          throw new Error('Failed to create quickplay game - no game data returned');
+        }
+        
         game = newGame;
+        console.log('Created new quickplay game:', game);
         
         // Add creator to the game
-        await supabase
+        const { error: playerError } = await supabase
           .from('game_players')
           .insert({
             game_id: game.id,
             player_id: currentUser.id,
-            position_x: 0,
-            position_y: 0,
+            position_x: Math.floor(Math.random() * 700) + 50,
+            position_y: Math.floor(Math.random() * 500) + 50
           });
+
+        if (playerError) {
+          console.error('Error adding player to new game:', playerError);
+          throw new Error(`Failed to join new game: ${playerError.message}`);
+        }
       }
 
+      // Update local state and navigate
       setGameId(game.id);
       setRoomCode(game.room_code || null);
       setIsHost(game.host_id === currentUser.id);
       navigate(`/game/${game.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to join quickplay');
+      console.error('Quickplay error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to join quickplay. Please try again.');
     } finally {
       setJoiningGame(false);
+    }
+  };
+  
+  // Function to clean up empty games or old inactive games
+  const cleanupEmptyGames = async () => {
+    try {
+      // Get all waiting games
+      const { data: waitingGames, error: gamesError } = await supabase
+        .from('games')
+        .select('id, current_players, created_at')
+        .eq('status', 'waiting');
+      
+      if (gamesError) {
+        console.error('Error fetching games for cleanup:', gamesError);
+        return;
+      }
+      
+      if (!waitingGames || waitingGames.length === 0) return;
+      
+      const now = new Date();
+      const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000); // 2 hours ago
+      
+      // Find games to clean up (empty or old)
+      const gamesToCleanup = waitingGames.filter(game => {
+        const gameDate = new Date(game.created_at);
+        return game.current_players <= 0 || gameDate < twoHoursAgo;
+      });
+      
+      if (gamesToCleanup.length === 0) return;
+      
+      console.log(`Cleaning up ${gamesToCleanup.length} empty or inactive games`);
+      
+      // Delete players first (foreign key constraint)
+      for (const game of gamesToCleanup) {
+        await supabase
+          .from('game_players')
+          .delete()
+          .eq('game_id', game.id);
+      }
+      
+      // Then delete the games
+      await supabase
+        .from('games')
+        .delete()
+        .in('id', gamesToCleanup.map(g => g.id));
+        
+    } catch (err) {
+      console.error('Error cleaning up games:', err);
+      // Non-critical error, don't need to show to user
     }
   };
 

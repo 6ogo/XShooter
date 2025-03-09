@@ -1362,8 +1362,8 @@ export function Game() {
           className="bg-gray-800 rounded-lg shadow-2xl border border-gray-700"
         />
 
-        {/* Game Info Overlay */}
-        <div className="absolute top-4 right-4 bg-black bg-opacity-50 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg">
+{/* Game Info Overlay */}
+<div className="absolute top-4 right-4 bg-black bg-opacity-50 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg">
           <div className="w-2 h-2 rounded-full bg-green-500"></div>
           <span>
             {isSingleplayer ? 'Singleplayer' : `${Array.from(players.values()).filter(p => p.health > 0).length} Players`}
@@ -1379,16 +1379,39 @@ export function Game() {
           <HelpCircle size={20} />
         </button>
 
+        {/* Exit Button */}
+        <button
+          onClick={handleReturnToLobby}
+          className="absolute top-16 left-4 bg-red-600 text-white p-1 rounded-full shadow-lg hover:bg-red-700 transition-colors"
+          title="Exit Game"
+        >
+          <LogOut size={20} />
+        </button>
+
         {/* Share Game Button (only for hosts in waiting state) */}
         {showShareLink && !isSingleplayer && (
           <div className="absolute top-16 right-4 bg-indigo-600 text-white p-2 rounded-lg flex items-center gap-2 shadow-lg cursor-pointer hover:bg-indigo-700 transition-colors"
-            onClick={copyShareLink}
+            onClick={() => {
+              const shareGameModal = document.createElement('div');
+              shareGameModal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50';
+              shareGameModal.innerHTML = `
+                <div class="max-w-md w-full" id="shareGameContainer"></div>
+              `;
+              document.body.appendChild(shareGameModal);
+              
+              // Close modal when clicking outside
+              shareGameModal.addEventListener('click', (e) => {
+                if (e.target === shareGameModal) {
+                  document.body.removeChild(shareGameModal);
+                }
+              });
+            }}
           >
             <Share2 size={16} />
-            <span>Share Game Link</span>
+            <span>Share Game</span>
           </div>
         )}
-
+        
         {/* Game Over Overlay */}
         {gameState === 'finished' && (
           <div className="absolute inset-0 bg-black bg-opacity-70 flex flex-col items-center justify-center rounded-lg">
