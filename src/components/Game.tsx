@@ -405,47 +405,198 @@ export function Game() {
     return () => clearInterval(movementInterval);
   }, [keys, currentUserId, players, updatePlayer, gameSettings.controlType]);
 
-  // Initialize the game and authentication
-  useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        if (id === 'singleplayer') {
-          // Generate a consistent player ID for singleplayer
-          const playerId = 'player_' + Math.random().toString(36).substring(2, 9);
-          setCurrentUserId(playerId);
+// Initialize the game and authentication
+useEffect(() => {
+  const checkAuth = async () => {
+    try {
+      if (id === 'singleplayer') {
+        console.log("Initializing singleplayer mode");
+        const playerId = 'player_' + Math.random().toString(36).substring(2, 9);
+        console.log("Generated player ID:", playerId);
+        setCurrentUserId(playerId);
+      
+        // Position player in the center of the canvas
+        const x = CANVAS_WIDTH / 2;
+        const y = CANVAS_HEIGHT / 2;
 
-          // Position player in the center of the canvas
-          const x = CANVAS_WIDTH / 2;
-          const y = CANVAS_HEIGHT / 2;
+        // Add the player with proper initial position
+        updatePlayer(playerId, {
+          id: playerId,
+          x,
+          y,
+          health: 100,
+          username: 'You'
+        });
 
-          // Add the player with proper initial position
-          updatePlayer(playerId, {
-            id: playerId,
-            x,
-            y,
-            health: 100,
-            username: 'You'
-          });
-
-          // Initialize AI opponents with a slight delay to ensure player is set first
-          setTimeout(() => {
-            initializeAIOpponents(AI_BOT_COUNT);
-            setGameState('playing');
-            addNotification("Welcome to Singleplayer Mode!", "#4CAF50", 3000);
-          }, 100);
-
-          return;
-        }
-
-        // Rest of the existing code for multiplayer...
-      } catch (error) {
-        console.error("Auth check error:", error);
-        addNotification("Error connecting to game server", "#e74c3c", 5000);
+        // Initialize AI opponents with a slight delay to ensure player is set first
+        setTimeout(() => {
+          console.log("Setting up AI opponents and starting game");
+          initializeAIOpponents(AI_BOT_COUNT);
+          setGameState('playing');
+          addNotification("Welcome to Singleplayer Mode!", "#4CAF50", 3000);
+          console.log("Game state should now be:", 'playing');
+        }, 100);
+      
+        return;
       }
-    };
+      
+      // Multiplayer code
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        navigate('/');
+        return;
+      }
+      
+      console.log("User authenticated:", user.id);
+      setCurrentUserId(user.id);
+      
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('username')
+        .eq('id', user.id)
+        .single();
+        
+      if (profile) {
+        const avatar_url = user.user_metadata?.avatar_url || null;
+        
+        // Random starting position for player
+        const x = Math.random() * (CANVAS_WIDTH - PLAYER_SIZE * 2) + PLAYER_SIZE;
+        const y = Math.random() * (CANVAS_HEIGHT - PLAYER_SIZE * 2) + PLAYER_SIZE;
+        
+        // Update local player state
+        updatePlayer(user.id, { 
+          x, 
+          y, 
+          health: 100, 
+          username: profile.username, 
+          avatar_url 
+        });
+        
+        // If we have a valid game ID (not singleplayer)
+        if (id && id !== 'singleplayer') {
+          console.log("Joining multiplayer game:", id);
+          
+          // Add player to the game in database
+          await supabase
+            .from('game_players')
+            .insert({ 
+              game_id: id, 
+              player_id: user.id, 
+              position_x: x, 
+              position_y: y 
+            });
+            
+          // Update player count
+          await supabase
+            .from('games')
+            .update({ current_players: players.size + 1 })
+            .eq('id', id);
+            
+          // Check if you're the host
+          const { data: game } = await supabase
+            .from('games')
+            .select('host_id, room_code')
+            .eq('id', id)
+            .single();
+            
+          if (game) {
+            // Store room code in state if available
+            if (game.room_code) {
+              console.log("Setting room code:", game.room_code);
+              setRoomCode(game.room_code);
+            }
+            
+            if (game.host_id === user.id) {
+              // Set host status
+              setIsHost(true);
+              
+              // Show share link for host
+              addNotification("Share the game link with friends to play together!", "#3498db", 5000);
+              setTimeout(() => setShowShareLink(true), 1000);
+            } else {
+              // Welcome message for non-host
+              addNotification("Welcome to the game! Get ready to play!", "#4CAF50", 3000);
+            }
+          }
+        }
+      }
+      
+      // Set initial game state to waiting
+      console.log("Setting game state to waiting");
+      setGameState('waiting');
+      
+    } catch (error) {
+      console.error("Auth check error:", error);
+      addNotification("Error connecting to game server", "#e74c3c", 5000);
+    }
+  };
 
-    checkAuth();
-  }, [id, navigate, updatePlayer, removePlayer, players, isSingleplayer]);
+  checkAuth();
+  
+  // Set up real-time subscriptions for multiplayer
+  if (!isSingleplayer && id && id !== 'singleplayer') {
+    console.log("Setting up realtime subscriptions for game:", id);
+    
+    const gameSubscription = supabase
+      .channel(`game:${id}`)
+      .on('presence', { event: 'sync' }, () => {
+        console.log("Presence sync event");
+      })
+      .on('presence', { event: 'join' }, () => {
+        console.log("Player joined");
+        addNotification("A player has joined the game!", "#3498db", 3000);
+      })
+      .on('presence', { event: 'leave' }, ({ leftPresences }) => {
+        console.log("Player left:", leftPresences);
+        // Handle player leaving (you'll need to complete this part)
+        leftPresences.forEach(presence => {
+          if (presence.user_id) {
+            removePlayer(presence.user_id);
+          }
+        });
+      })
+      .subscribe();
+      
+    // Listen for game updates
+    const gamePlayerSubscription = supabase
+      .channel(`game_players:${id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'game_players', filter: `game_id=eq.${id}` },
+        (payload) => {
+          console.log("New player joined:", payload);
+          const { player_id, position_x, position_y } = payload.new;
+          
+          // Fetch player profile
+          supabase
+            .from('profiles')
+            .select('username')
+            .eq('id', player_id)
+            .single()
+            .then(({ data }) => {
+              if (data) {
+                // Add new player to the game state
+                updatePlayer(player_id, {
+                  id: player_id,
+                  x: position_x,
+                  y: position_y,
+                  health: 100,
+                  username: data.username
+                });
+              }
+            });
+        }
+      )
+      .subscribe();
+      
+    // Return cleanup function
+    return () => {
+      gameSubscription.unsubscribe();
+      gamePlayerSubscription.unsubscribe();
+    };
+  }
+  
+}, [id, navigate, updatePlayer, removePlayer, players, isSingleplayer, setIsHost, setRoomCode]);
 
   // Notification system
   const addNotification = useCallback((text: string, color: string, duration: number) => {
@@ -2301,3 +2452,11 @@ export function Game() {
     </div>
   );
 }
+
+function setRoomCode(room_code: any) {
+  throw new Error('Function not implemented.');
+}
+function setIsHost(arg0: boolean) {
+  throw new Error('Function not implemented.');
+}
+
