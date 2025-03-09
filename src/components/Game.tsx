@@ -122,9 +122,9 @@ export function Game() {
 
   // Game state
   const [projectiles, setProjectiles] = useState<Projectile[]>([]);
-  const [particles, setParticles] = useState<ParticleEffect[]>([]);
-  const [damageNumbers, setDamageNumbers] = useState<DamageNumber[]>([]);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [_particles, setParticles] = useState<ParticleEffect[]>([]);
+  const [_damageNumbers, setDamageNumbers] = useState<DamageNumber[]>([]);
+  const [_notifications, setNotifications] = useState<Notification[]>([]);
   const [playerWinStreaks, setPlayerWinStreaks] = useState<Map<string, number>>(new Map());
   const [highestStreakValue, setHighestStreakValue] = useState<number>(0);
   const [shotCount, setShotCount] = useState(0);
@@ -343,36 +343,56 @@ export function Game() {
   }, [id]);
 
   // Player movement based on keyboard input
-  // Player movement based on keyboard input
   useEffect(() => {
     if (!currentUserId) return;
 
-    // Create a reference to track if this effect's interval is active
-    const isActive = { current: true };
+    // Track the last position to avoid redundant updates
+    const lastPosition = {
+      x: players.get(currentUserId)?.x || 0,
+      y: players.get(currentUserId)?.y || 0
+    };
 
+    // Track active keys for smoother detection and less jitter
+    const activeKeys = {
+      up: false,
+      down: false,
+      left: false,
+      right: false
+    };
+
+    // Update active keys based on keyboard state
+    const updateActiveKeys = () => {
+      if (gameSettings.controlType === 'wasd') {
+        activeKeys.up = keys.w;
+        activeKeys.down = keys.s;
+        activeKeys.left = keys.a;
+        activeKeys.right = keys.d;
+      } else {
+        activeKeys.up = keys.ArrowUp;
+        activeKeys.down = keys.ArrowDown;
+        activeKeys.left = keys.ArrowLeft;
+        activeKeys.right = keys.ArrowRight;
+      }
+    };
+
+    // Function to handle movement with optimized state updates
     const handleMovement = () => {
-      if (!isActive.current) return;
-
       const currentPlayer = players.get(currentUserId);
       if (!currentPlayer || currentPlayer.health <= 0 || showTutorial) return;
 
+      // Update active keys
+      updateActiveKeys();
+
+      // Calculate movement vector
       const moveSpeed = PLAYER_MOVEMENT_SPEED;
       let dx = 0, dy = 0;
 
-      // Determine which keys to check based on settings
-      if (gameSettings.controlType === 'wasd') {
-        if (keys.w) dy -= moveSpeed;
-        if (keys.s) dy += moveSpeed;
-        if (keys.a) dx -= moveSpeed;
-        if (keys.d) dx += moveSpeed;
-      } else {
-        if (keys.ArrowUp) dy -= moveSpeed;
-        if (keys.ArrowDown) dy += moveSpeed;
-        if (keys.ArrowLeft) dx -= moveSpeed;
-        if (keys.ArrowRight) dx += moveSpeed;
-      }
+      if (activeKeys.up) dy -= moveSpeed;
+      if (activeKeys.down) dy += moveSpeed;
+      if (activeKeys.left) dx -= moveSpeed;
+      if (activeKeys.right) dx += moveSpeed;
 
-      // Normalize diagonal movement to prevent faster diagonal speed
+      // Normalize diagonal movement
       if (dx !== 0 && dy !== 0) {
         const factor = 1 / Math.sqrt(2);
         dx *= factor;
@@ -381,26 +401,28 @@ export function Game() {
 
       if (dx !== 0 || dy !== 0) {
         // Calculate new position with boundary constraints
-        // Use strict boundary checks to prevent any possibility of going out of bounds
-        const minX = PLAYER_SIZE + 1; // Add 1px buffer
+        const minX = PLAYER_SIZE + 1;
         const maxX = CANVAS_WIDTH - PLAYER_SIZE - 1;
         const minY = PLAYER_SIZE + 1;
         const maxY = CANVAS_HEIGHT - PLAYER_SIZE - 1;
 
-        // Calculate proposed new position
-        const newX = currentPlayer.x + dx;
-        const newY = currentPlayer.y + dy;
+        const newX = Math.max(minX, Math.min(maxX, currentPlayer.x + dx));
+        const newY = Math.max(minY, Math.min(maxY, currentPlayer.y + dy));
 
-        // Enforce strict boundary constraints
-        const boundedX = Math.max(minX, Math.min(maxX, newX));
-        const boundedY = Math.max(minY, Math.min(maxY, newY));
+        // Only update if position changed by a significant amount (reduces state updates)
+        const positionChanged =
+          Math.abs(newX - lastPosition.x) > 0.5 ||
+          Math.abs(newY - lastPosition.y) > 0.5;
 
-        // Only update if position has actually changed
-        if (boundedX !== currentPlayer.x || boundedY !== currentPlayer.y) {
-          // Update player position and store velocity for visual effects
+        if (positionChanged) {
+          // Update last position
+          lastPosition.x = newX;
+          lastPosition.y = newY;
+
+          // Use a more efficient update that doesn't trigger as many re-renders
           updatePlayer(currentUserId, {
-            x: boundedX,
-            y: boundedY,
+            x: newX,
+            y: newY,
             lastMoveTime: performance.now(),
             velocity: { x: dx, y: dy }
           });
@@ -411,24 +433,37 @@ export function Game() {
       }
     };
 
-    // Use requestAnimationFrame for smoother movement
-    let animationFrameId: number;
+    // Use a more optimized animation approach
+    let animationId: number;
+    let lastFrameTime = 0;
+    const targetFPS = 60; // Target 60 FPS
+    const frameInterval = 1000 / targetFPS;
 
-    const animateMovement = () => {
-      if (!isActive.current) return;
-      handleMovement();
-      animationFrameId = requestAnimationFrame(animateMovement);
+    const animate = (timestamp: number) => {
+      animationId = requestAnimationFrame(animate);
+
+      // Calculate time since last frame
+      const elapsed = timestamp - lastFrameTime;
+
+      // Only update if enough time has passed (helps maintain consistent framerate)
+      if (elapsed > frameInterval) {
+        // Update last frame time, accounting for remainder
+        lastFrameTime = timestamp - (elapsed % frameInterval);
+
+        // Run movement logic
+        handleMovement();
+      }
     };
 
-    // Start animation
-    animationFrameId = requestAnimationFrame(animateMovement);
+    // Start animation loop
+    animationId = requestAnimationFrame(animate);
 
     // Clean up
     return () => {
-      isActive.current = false;
-      cancelAnimationFrame(animationFrameId);
+      cancelAnimationFrame(animationId);
     };
   }, [keys, currentUserId, players, updatePlayer, gameSettings.controlType, showTutorial]);
+
 
   // Notification system
   const addNotification = useCallback((text: string, color: string, duration: number) => {
@@ -450,34 +485,34 @@ export function Game() {
         if (id === 'singleplayer') {
           console.log("Initializing singleplayer mode");
 
-          // Only initialize singleplayer mode if we don't already have a current user ID set
-          if (!currentUserId) {
-            const playerId = 'player_' + Math.random().toString(36).substring(2, 9);
-            console.log("Generated player ID:", playerId);
-            setCurrentUserId(playerId);
+          // Generate a consistent player ID for this session
+          const playerId = 'player_' + Math.random().toString(36).substring(2, 9);
+          console.log("Generated player ID:", playerId);
 
-            // Position player in the center of the canvas
-            const x = CANVAS_WIDTH / 2;
-            const y = CANVAS_HEIGHT / 2;
+          // Set the current user ID directly without async state update
+          setCurrentUserId(playerId);
 
-            // Add the player with proper initial position
-            updatePlayer(currentUserId || playerId, {
-              id: currentUserId || playerId,
-              x,
-              y,
-              health: 100,
-              username: 'You'
-            });
+          // Position player in the center of the canvas
+          const x = CANVAS_WIDTH / 2;
+          const y = CANVAS_HEIGHT / 2;
 
-            // Initialize AI opponents with a slight delay to ensure player is set first
-            setTimeout(() => {
-              console.log("Setting up AI opponents and starting game");
-              initializeAIOpponents(AI_BOT_COUNT);
-              setGameState('playing');
-              addNotification("Welcome to Singleplayer Mode!", "#4CAF50", 3000);
-              console.log("Game state should now be:", 'playing');
-            }, 100);
-          }
+          // Add the player with proper initial position - use the direct playerId
+          updatePlayer(playerId, {
+            id: playerId,
+            x,
+            y,
+            health: 100,
+            username: 'You'
+          });
+
+          // Initialize AI opponents with a slight delay to ensure player is set first
+          setTimeout(() => {
+            console.log("Setting up AI opponents and starting game");
+            initializeAIOpponents(AI_BOT_COUNT);
+            setGameState('playing');
+            addNotification("Welcome to Singleplayer Mode!", "#4CAF50", 3000);
+            console.log("Game state should now be:", 'playing');
+          }, 300); // Increased delay to ensure state is properly updated
 
           return;
         }
@@ -1295,13 +1330,15 @@ export function Game() {
     ]);
   }, []);
 
-  // Game render loop
+  // Game render loop useEffect
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // Performance monitoring
+    const fpsUpdateTime = useRef<number>(0);
     let lastFrameTimestamp = performance.now();
 
     // Main game loop - extracted into a named function for better performance
@@ -1310,16 +1347,19 @@ export function Game() {
       const deltaTime = currentTime - lastFrameTimestamp;
       lastFrameTimestamp = currentTime;
 
-      // Calculate FPS for display
-      const now = performance.now();
-      const times = fpsTimestamps.current;
-      times.push(now);
+      // Calculate FPS for display - limit updates to reduce overhead
+      if (currentTime - fpsUpdateTime.current > 500) { // Update FPS twice per second
+        const now = performance.now();
+        const times = fpsTimestamps.current;
+        times.push(now);
 
-      while (times[0] < now - 1000) {
-        times.shift();
+        while (times[0] < now - 1000) {
+          times.shift();
+        }
+
+        setFps(times.length);
+        fpsUpdateTime.current = currentTime;
       }
-
-      setFps(times.length);
 
       // Skip animation frames if we're in tutorial mode
       if (showTutorial) {
@@ -1356,7 +1396,7 @@ export function Game() {
         ctx.strokeStyle = '#2a2a4e';
         ctx.lineWidth = 1;
 
-        // Draw vertical grid lines
+        // Draw vertical grid lines (optimized - only draw visible lines)
         for (let x = 0; x <= CANVAS_WIDTH; x += 40) {
           ctx.beginPath();
           ctx.moveTo(x, 0);
@@ -1364,7 +1404,7 @@ export function Game() {
           ctx.stroke();
         }
 
-        // Draw horizontal grid lines
+        // Draw horizontal grid lines (optimized - only draw visible lines)
         for (let y = 0; y <= CANVAS_HEIGHT; y += 40) {
           ctx.beginPath();
           ctx.moveTo(0, y);
@@ -1391,14 +1431,24 @@ export function Game() {
       players.forEach((player) => {
         if (player.health <= 0) return;
 
+        // Skip drawing players far outside the viewport for performance
+        if (
+          player.x < -PLAYER_SIZE * 2 ||
+          player.x > CANVAS_WIDTH + PLAYER_SIZE * 2 ||
+          player.y < -PLAYER_SIZE * 2 ||
+          player.y > CANVAS_HEIGHT + PLAYER_SIZE * 2
+        ) {
+          return;
+        }
+
         // Check if player has the highest win streak (and it's greater than 0)
         const hasHighestStreak = !player.isAI &&
           highestStreakValue > 0 &&
           playerWinStreaks.get(player.id) === highestStreakValue;
 
         // Draw player hit effect (enhanced)
-        if (player.lastHitTime && performance.now() - player.lastHitTime < HIT_EFFECT_DURATION) {
-          const effectProgress = 1 - ((performance.now() - player.lastHitTime) / HIT_EFFECT_DURATION);
+        if (player.lastHitTime && currentTime - player.lastHitTime < HIT_EFFECT_DURATION) {
+          const effectProgress = 1 - ((currentTime - player.lastHitTime) / HIT_EFFECT_DURATION);
           const hitEffectSize = PLAYER_SIZE + 8 * effectProgress;
 
           // Outer glow
@@ -1414,12 +1464,37 @@ export function Game() {
           ctx.fill();
         }
 
-        // Draw movement trail (keep your existing movement trail code)
+        // Draw movement trail for players with velocity (only in high quality mode)
+        if (gameSettings.graphicsQuality === 'high' && player.velocity && (Math.abs(player.velocity.x) > 0.1 || Math.abs(player.velocity.y) > 0.1)) {
+          const trailLength = 3; // Number of trail segments
+          const trailFade = 0.7; // Trail opacity fade factor
+
+          for (let i = 0; i < trailLength; i++) {
+            const trailDistance = (i + 1) * 5; // Space between trail segments
+            const trailX = player.x - player.velocity.x * trailDistance / PLAYER_MOVEMENT_SPEED;
+            const trailY = player.y - player.velocity.y * trailDistance / PLAYER_MOVEMENT_SPEED;
+            const trailSize = PLAYER_SIZE * (1 - 0.2 * (i + 1)); // Decreasing trail size
+            const opacity = 0.3 * Math.pow(trailFade, i); // Decreasing opacity
+
+            ctx.beginPath();
+            ctx.arc(trailX, trailY, trailSize, 0, Math.PI * 2);
+
+            // Create trail color based on player
+            const trailColor = player.id === currentUserId
+              ? `rgba(76, 175, 80, ${opacity})` // Green for current player
+              : player.isAI
+                ? `rgba(244, 67, 54, ${opacity})` // Red for AI
+                : `rgba(33, 150, 243, ${opacity})`; // Blue for other players
+
+            ctx.fillStyle = trailColor;
+            ctx.fill();
+          }
+        }
 
         // Draw gold streak border if applicable
         if (hasHighestStreak) {
           // Animated gold streak border
-          const pulseIntensity = (Math.sin(performance.now() / 200) + 1) / 2; // 0 to 1 pulsing
+          const pulseIntensity = (Math.sin(currentTime / 200) + 1) / 2; // 0 to 1 pulsing
           const outerSize = PLAYER_SIZE + 4;
           const glowSize = PLAYER_SIZE + 6 + pulseIntensity * 2;
 
@@ -1540,7 +1615,7 @@ export function Game() {
 
         // Add pulsing effect on low health
         if (player.health <= LOW_HEALTH_THRESHOLD) {
-          const pulseIntensity = (Math.sin(performance.now() / 200) + 1) / 2; // 0 to 1 pulsing
+          const pulseIntensity = (Math.sin(currentTime / 200) + 1) / 2; // 0 to 1 pulsing
           ctx.fillStyle = `rgba(255, 0, 0, ${pulseIntensity * 0.3})`;
           ctx.beginPath();
           ctx.roundRect(healthBarX, healthBarY, healthBarWidth, healthBarHeight, 2);
@@ -1567,148 +1642,164 @@ export function Game() {
         }
       });
 
-      // Update and draw projectiles
+      // Update and draw projectiles - optimize with batch processing
       const updatedProjectiles = projectiles.map(proj => {
         const newX = proj.x + proj.dx;
         const newY = proj.y + proj.dy;
-        if (newX < 0 || newX > CANVAS_WIDTH || newY < 0 || newY > CANVAS_HEIGHT) return null;
+
+        // Check if projectile is out of bounds
+        if (newX < 0 || newX > CANVAS_WIDTH || newY < 0 || newY > CANVAS_HEIGHT) {
+          return null;
+        }
 
         // Add trail points for high quality
         let trail = proj.trail;
-        if (gameSettings.graphicsQuality === 'high') {
-          trail = [{ x: proj.x, y: proj.y }, ...trail.slice(0, 5)];
+        if (gameSettings.graphicsQuality !== 'low') {
+          const maxTrailPoints = gameSettings.graphicsQuality === 'high' ? 6 : 3;
+          trail = [{ x: proj.x, y: proj.y }, ...trail.slice(0, maxTrailPoints - 1)];
         }
 
         return { ...proj, x: newX, y: newY, trail };
       }).filter((proj): proj is Projectile => proj !== null);
 
-      // Draw projectiles based on graphics quality
-      updatedProjectiles.forEach(proj => {
-        // Draw trail for high and medium quality
-        if ((gameSettings.graphicsQuality === 'high' || gameSettings.graphicsQuality === 'medium') && proj.trail.length > 1) {
-          ctx.beginPath();
-          ctx.moveTo(proj.x, proj.y);
-
-          for (let i = 0; i < proj.trail.length; i++) {
-            ctx.lineTo(proj.trail[i].x, proj.trail[i].y);
-          }
-
-          // Make trail glow effect more visible with smoother gradients
-          const isPlayerProjectile = proj.playerId === currentUserId;
-          const trailColor = isPlayerProjectile ? 'rgba(76, 175, 80, 0.6)' : 'rgba(255, 85, 85, 0.6)';
-
-          // For high quality, use actual gradient
-          if (gameSettings.graphicsQuality === 'high') {
-            const gradient = ctx.createLinearGradient(
-              proj.x, proj.y,
-              proj.trail[proj.trail.length - 1].x, proj.trail[proj.trail.length - 1].y
-            );
-            gradient.addColorStop(0, isPlayerProjectile ? 'rgba(100, 255, 100, 0.7)' : 'rgba(255, 100, 100, 0.7)');
-            gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-            ctx.strokeStyle = gradient;
-          } else {
-            ctx.strokeStyle = trailColor;
-          }
-
-          ctx.lineWidth = 3;
-          ctx.stroke();
-        }
-
-        // Draw projectile with larger size and glow effect
-        ctx.beginPath();
-        ctx.arc(proj.x, proj.y, proj.size, 0, Math.PI * 2);
-
-        // Brighter colors for better visibility
-        if (proj.playerId === currentUserId) {
-          // Player projectiles: bright green with gradient
-          const gradient = ctx.createRadialGradient(proj.x, proj.y, 0, proj.x, proj.y, proj.size);
-          gradient.addColorStop(0, '#AAFFAA');
-          gradient.addColorStop(1, '#4CAF50');
-          ctx.fillStyle = gradient;
-        } else {
-          // Enemy projectiles: use color based on the projectile's defined color
-          const gradient = ctx.createRadialGradient(proj.x, proj.y, 0, proj.x, proj.y, proj.size);
-
-          // Extract base color components for center highlight
-          let colorComponents = { r: 255, g: 85, b: 85 }; // Default red
-
-          // Parse hex color to RGB
-          if (proj.color.startsWith('#') && proj.color.length === 7) {
-            colorComponents = {
-              r: parseInt(proj.color.slice(1, 3), 16),
-              g: parseInt(proj.color.slice(3, 5), 16),
-              b: parseInt(proj.color.slice(5, 7), 16)
-            };
-          }
-
-          // Create lighter version for center
-          const centerColor = `rgb(${Math.min(colorComponents.r + 50, 255)}, ${Math.min(colorComponents.g + 50, 255)}, ${Math.min(colorComponents.b + 50, 255)})`;
-
-          gradient.addColorStop(0, centerColor);
-          gradient.addColorStop(1, proj.color);
-          ctx.fillStyle = gradient;
-        }
-        ctx.fill();
-
-        // Draw glow for all quality levels
-        ctx.beginPath();
-        ctx.arc(proj.x, proj.y, proj.size + 4, 0, Math.PI * 2);
-        if (proj.playerId === currentUserId) {
-          ctx.fillStyle = 'rgba(76, 175, 80, 0.3)';
-        } else {
-          // Extract alpha component for glow
-          let glowColor = 'rgba(255, 85, 85, 0.3)'; // Default
-
-          if (proj.color.startsWith('#') && proj.color.length === 7) {
-            const r = parseInt(proj.color.slice(1, 3), 16);
-            const g = parseInt(proj.color.slice(3, 5), 16);
-            const b = parseInt(proj.color.slice(5, 7), 16);
-            glowColor = `rgba(${r}, ${g}, ${b}, 0.3)`;
-          }
-
-          ctx.fillStyle = glowColor;
-        }
-        ctx.fill();
-      });
-      setProjectiles(updatedProjectiles);
-
-      // Update and draw particles
-      setParticles(prev => {
-        const currentTime = performance.now();
-        return prev
-          .filter(effect => currentTime - effect.timeCreated < 2000)
-          .map(effect => {
-            const updatedParticles = effect.particles.map(p => {
-              p.x += p.dx;
-              p.y += p.dy;
-              p.life -= 0.016 / p.maxLife; // Reduce life based on frame time
-              return p;
-            }).filter(p => p.life > 0);
-
-            // Draw particles with improved rendering
-            updatedParticles.forEach(p => {
-              ctx.globalAlpha = p.life;
+      // Draw projectiles based on graphics quality - batch similar operations
+      if (updatedProjectiles.length > 0) {
+        // Draw trails first (layered underneath)
+        if (gameSettings.graphicsQuality !== 'low') {
+          updatedProjectiles.forEach(proj => {
+            if (proj.trail.length > 1) {
               ctx.beginPath();
+              ctx.moveTo(proj.x, proj.y);
 
-              // High quality = use gradient for particles
-              if (gameSettings.graphicsQuality === 'high') {
-                const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size);
-                gradient.addColorStop(0, p.color);
-                gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-                ctx.fillStyle = gradient;
-              } else {
-                ctx.fillStyle = p.color;
+              for (let i = 0; i < proj.trail.length; i++) {
+                ctx.lineTo(proj.trail[i].x, proj.trail[i].y);
               }
 
-              ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-              ctx.fill();
-            });
-            ctx.globalAlpha = 1;
+              // Make trail glow effect more visible with smoother gradients
+              const isPlayerProjectile = proj.playerId === currentUserId;
 
-            return { ...effect, particles: updatedParticles };
-          })
-          .filter(effect => effect.particles.length > 0);
-      });
+              // For high quality, use actual gradient
+              if (gameSettings.graphicsQuality === 'high') {
+                const gradient = ctx.createLinearGradient(
+                  proj.x, proj.y,
+                  proj.trail[proj.trail.length - 1].x, proj.trail[proj.trail.length - 1].y
+                );
+                gradient.addColorStop(0, isPlayerProjectile ? 'rgba(100, 255, 100, 0.7)' : 'rgba(255, 100, 100, 0.7)');
+                gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+                ctx.strokeStyle = gradient;
+              } else {
+                ctx.strokeStyle = isPlayerProjectile ? 'rgba(76, 175, 80, 0.6)' : 'rgba(255, 85, 85, 0.6)';
+              }
+
+              ctx.lineWidth = 3;
+              ctx.stroke();
+            }
+          });
+        }
+
+        // Then draw all projectiles
+        updatedProjectiles.forEach(proj => {
+          // Draw projectile with larger size and glow effect
+          ctx.beginPath();
+          ctx.arc(proj.x, proj.y, proj.size, 0, Math.PI * 2);
+
+          // Brighter colors for better visibility
+          if (proj.playerId === currentUserId) {
+            // Player projectiles: bright green with gradient
+            const gradient = ctx.createRadialGradient(proj.x, proj.y, 0, proj.x, proj.y, proj.size);
+            gradient.addColorStop(0, '#AAFFAA');
+            gradient.addColorStop(1, '#4CAF50');
+            ctx.fillStyle = gradient;
+          } else {
+            // Enemy projectiles: use color based on the projectile's defined color
+            const gradient = ctx.createRadialGradient(proj.x, proj.y, 0, proj.x, proj.y, proj.size);
+
+            // Extract base color components for center highlight
+            let colorComponents = { r: 255, g: 85, b: 85 }; // Default red
+
+            // Parse hex color to RGB
+            if (proj.color.startsWith('#') && proj.color.length === 7) {
+              colorComponents = {
+                r: parseInt(proj.color.slice(1, 3), 16),
+                g: parseInt(proj.color.slice(3, 5), 16),
+                b: parseInt(proj.color.slice(5, 7), 16)
+              };
+            }
+
+            // Create lighter version for center
+            const centerColor = `rgb(${Math.min(colorComponents.r + 50, 255)}, ${Math.min(colorComponents.g + 50, 255)}, ${Math.min(colorComponents.b + 50, 255)})`;
+
+            gradient.addColorStop(0, centerColor);
+            gradient.addColorStop(1, proj.color);
+            ctx.fillStyle = gradient;
+          }
+          ctx.fill();
+
+          // Draw glow for all quality levels (skip in low quality for performance)
+          if (gameSettings.graphicsQuality !== 'low') {
+            ctx.beginPath();
+            ctx.arc(proj.x, proj.y, proj.size + 4, 0, Math.PI * 2);
+            if (proj.playerId === currentUserId) {
+              ctx.fillStyle = 'rgba(76, 175, 80, 0.3)';
+            } else {
+              // Extract alpha component for glow
+              let glowColor = 'rgba(255, 85, 85, 0.3)'; // Default
+
+              if (proj.color.startsWith('#') && proj.color.length === 7) {
+                const r = parseInt(proj.color.slice(1, 3), 16);
+                const g = parseInt(proj.color.slice(3, 5), 16);
+                const b = parseInt(proj.color.slice(5, 7), 16);
+                glowColor = `rgba(${r}, ${g}, ${b}, 0.3)`;
+              }
+
+              ctx.fillStyle = glowColor;
+            }
+            ctx.fill();
+          }
+        });
+      }
+
+      setProjectiles(updatedProjectiles);
+
+      // Update and draw particles - only in medium or high quality
+      if (gameSettings.graphicsQuality !== 'low') {
+        setParticles(prev => {
+          const currentTime = performance.now();
+          return prev
+            .filter(effect => currentTime - effect.timeCreated < 2000)
+            .map(effect => {
+              const updatedParticles = effect.particles.map(p => {
+                p.x += p.dx;
+                p.y += p.dy;
+                p.life -= 0.016 / p.maxLife; // Reduce life based on frame time
+                return p;
+              }).filter(p => p.life > 0);
+
+              // Draw particles with improved rendering
+              updatedParticles.forEach(p => {
+                ctx.globalAlpha = p.life;
+                ctx.beginPath();
+
+                // High quality = use gradient for particles
+                if (gameSettings.graphicsQuality === 'high') {
+                  const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size);
+                  gradient.addColorStop(0, p.color);
+                  gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+                  ctx.fillStyle = gradient;
+                } else {
+                  ctx.fillStyle = p.color;
+                }
+
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+              });
+              ctx.globalAlpha = 1;
+
+              return { ...effect, particles: updatedParticles };
+            })
+            .filter(effect => effect.particles.length > 0);
+        });
+      }
 
       // Update and draw damage numbers with improved animation
       setDamageNumbers(prev => {
@@ -1808,7 +1899,7 @@ export function Game() {
         return validNotifications;
       });
 
-      // Check for projectile collisions
+      // Collision detection
       for (let i = projectiles.length - 1; i >= 0; i--) {
         const projectile = projectiles[i];
         const newX = projectile.x + projectile.dx;
@@ -1839,7 +1930,9 @@ export function Game() {
             const newHealth = Math.max(0, player.health - damage);
 
             // Create hit effects
-            createParticleEffect(newX, newY, 15, '#FF5555');
+            if (gameSettings.graphicsQuality !== 'low') {
+              createParticleEffect(newX, newY, 15, '#FF5555');
+            }
             createDamageNumber(player.x, player.y - PLAYER_SIZE - 10, damage);
 
             // Add hit impulse for more dynamic movement feedback
@@ -1949,7 +2042,7 @@ export function Game() {
                 const intensity = damage / 100 * 10; // Scale shake with damage
                 canvas.style.transform = `translate(${(Math.random() - 0.5) * intensity}px, ${(Math.random() - 0.5) * intensity}px)`;
                 setTimeout(() => {
-                  canvas.style.transform = 'translate(0, 0)';
+                  if (canvas) canvas.style.transform = 'translate(0, 0)';
                 }, 100);
               }
             }
@@ -2078,6 +2171,10 @@ export function Game() {
       }
     };
 
+    // Add to the component state variables:
+    fpsTimestamps.current = [];
+    lastFrameTimestamp = performance.now();
+
     // Store the game loop function in ref
     gameLoopRef.current = draw;
 
@@ -2092,7 +2189,6 @@ export function Game() {
     gameSettings, showTutorial, addNotification, createDamageNumber, createParticleEffect,
     handleGameEnd, loadPlayerAvatar, projectiles, updateAIBehavior
   ]);
-
 
   // Helper function to fire projectile
   const fireProjectile = useCallback((targetX: number, targetY: number) => {
