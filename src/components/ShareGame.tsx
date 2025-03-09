@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Twitter, Copy, Check, Send } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 

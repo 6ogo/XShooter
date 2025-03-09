@@ -87,7 +87,7 @@ export function Leaderboard() {
           if (profilesError) throw profilesError;
           
           // Get user metadata to extract avatar URLs and Twitter handles
-          const { data: { users }, error: usersError } = await supabase.auth.admin.listUsers({
+          const { data: { users } } = await supabase.auth.admin.listUsers({
             perPage: 1000,
           }).catch(() => {
             // Fallback if admin functions are not available

@@ -15,8 +15,7 @@ interface UserData {
 }
 
 export function GameLobby() {
-  const [roomCode, setRoomCodeState] = useState<string>('');
-  const gameLink = `${window.location.origin}/game/${roomCode}`;
+  const [, setRoomCodeState] = useState<string>('');
   const { setGameId, setRoomCode, setIsHost, reset } = useGameStore();
   const [activeGames, setActiveGames] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -24,7 +23,7 @@ export function GameLobby() {
   const [joiningGame, setJoiningGame] = useState(false);
   const [roomCodeInput, setRoomCodeInput] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [successMessage] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [twitterHandle, setTwitterHandle] = useState<string | null>(null);
   const [userData, setUserData] = useState<UserData | null>(null);
