@@ -113,9 +113,11 @@ interface PlayerAvatarCache {
 
 export function Game() {
   const { id } = useParams<{ id: string }>();
+  console.log("Game ID from route params:", id);
+
   const navigate = useNavigate();
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { players, updatePlayer, removePlayer } = useGameStore();
+  const { players, updatePlayer, removePlayer, setRoomCode, setIsHost } = useGameStore();
 
   // Game state
   const [projectiles, setProjectiles] = useState<Projectile[]>([]);
@@ -2451,12 +2453,4 @@ useEffect(() => {
       <AchievementNotification achievement={unlockingAchievement} onClose={() => setUnlockingAchievement(null)} />
     </div>
   );
-}
-
-function setRoomCode(room_code: any) {
-  throw new Error('Function not implemented.');
-}
-function setIsHost(arg0: boolean) {
-  throw new Error('Function not implemented.');
-}
-
+};
