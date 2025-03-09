@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Gamepad2, Trophy, Users, Twitter } from 'lucide-react';
+import { Gamepad2, Trophy, Users, Twitter, Loader2, AlertCircle } from 'lucide-react';
 
 export function Auth() {
   const [email, setEmail] = useState('');
@@ -11,19 +11,38 @@ export function Auth() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
     // Check if user is already logged in
     const checkUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        navigate('/game/lobby');
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          navigate('/game/lobby');
+        }
+      } catch (err) {
+        console.error('Auth check error:', err);
+      } finally {
+        setCheckingSession(false);
       }
     };
 
     checkUser();
   }, [navigate]);
+
+  const validateEmail = (email: string) => {
+    return /\S+@\S+\.\S+/.test(email);
+  };
+
+  const validatePassword = (password: string) => {
+    return password.length >= 6;
+  };
+
+  const validateUsername = (username: string) => {
+    return username.length >= 3 && /^[a-zA-Z0-9_]+$/.test(username);
+  };
 
   const handleXAuth = async () => {
     setLoading(true);
@@ -33,9 +52,8 @@ export function Auth() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'twitter',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,  // Explicit callback URL
+          redirectTo: `${window.location.origin}/auth/callback`,
           queryParams: {
-            // Request additional scopes to get Twitter handle
             access_type: 'offline',
             prompt: 'consent'
           }
@@ -54,14 +72,25 @@ export function Auth() {
     setLoading(true);
     setError(null);
 
-    // For sign up, require terms agreement
-    if (isSignUp && !agreedToTerms) {
-      setError('You must agree to the Terms of Service and Privacy Policy to continue');
-      setLoading(false);
-      return;
-    }
-
     try {
+      // Form validation
+      if (isSignUp) {
+        if (!validateUsername(username)) {
+          throw new Error('Username must be at least 3 characters and contain only letters, numbers, and underscores');
+        }
+        if (!agreedToTerms) {
+          throw new Error('You must agree to the Terms of Service and Privacy Policy');
+        }
+      }
+
+      if (!validateEmail(email)) {
+        throw new Error('Please enter a valid email address');
+      }
+
+      if (!validatePassword(password)) {
+        throw new Error('Password must be at least 6 characters');
+      }
+
       if (isSignUp) {
         // Check for existing username using proper query
         const { data: existingUsers, error: checkError } = await supabase
@@ -74,14 +103,14 @@ export function Auth() {
           throw new Error('Username already taken');
         }
 
-        // Sign up with email and password, and set the username as the display name
+        // Sign up with email and password
         const { data: { user }, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
           options: {
             data: {
-              display_name: username, // Set the display_name metadata
-              twitter_handle: null // Initialize twitter_handle as null for email users
+              display_name: username,
+              twitter_handle: null
             }
           }
         });
@@ -137,26 +166,43 @@ export function Auth() {
     }
   };
 
+  if (checkingSession) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="flex flex-col items-center text-white">
+          <Loader2 className="h-8 w-8 animate-spin mb-2" />
+          <p>Loading XShooter...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4">
+    <div className="min-h-screen bg-gray-900 bg-gradient-to-b from-gray-800 to-gray-900 flex flex-col items-center justify-center p-4">
       <div className="max-w-md w-full space-y-8">
         <div className="text-center">
-          <h1 className="text-4xl font-bold text-white mb-2">XShooter</h1>
-          <p className="text-gray-400">The ultimate multiplayer shooting game</p>
+          <h1 className="text-5xl font-bold text-white mb-2 text-transparent bg-clip-text bg-gradient-to-r from-indigo-500 to-purple-600">XShooter</h1>
+          <p className="text-gray-300">The ultimate multiplayer shooting game</p>
         </div>
 
-        <div className="bg-white rounded-lg shadow-xl p-8">
+        <div className="bg-white rounded-lg shadow-2xl p-8 border border-indigo-100">
           <div className="grid grid-cols-3 gap-4 mb-8">
             <div className="text-center">
-              <Gamepad2 className="mx-auto h-8 w-8 text-indigo-600" />
+              <div className="bg-indigo-100 p-3 rounded-lg mx-auto w-14 h-14 flex items-center justify-center">
+                <Gamepad2 className="h-8 w-8 text-indigo-600" />
+              </div>
               <p className="mt-2 text-sm text-gray-600">Real-time Combat</p>
             </div>
             <div className="text-center">
-              <Users className="mx-auto h-8 w-8 text-indigo-600" />
+              <div className="bg-indigo-100 p-3 rounded-lg mx-auto w-14 h-14 flex items-center justify-center">
+                <Users className="h-8 w-8 text-indigo-600" />
+              </div>
               <p className="mt-2 text-sm text-gray-600">Multiplayer</p>
             </div>
             <div className="text-center">
-              <Trophy className="mx-auto h-8 w-8 text-indigo-600" />
+              <div className="bg-indigo-100 p-3 rounded-lg mx-auto w-14 h-14 flex items-center justify-center">
+                <Trophy className="h-8 w-8 text-indigo-600" />
+              </div>
               <p className="mt-2 text-sm text-gray-600">Leaderboards</p>
             </div>
           </div>
@@ -166,10 +212,14 @@ export function Auth() {
             <button
               onClick={handleXAuth}
               disabled={loading}
-              className="w-full flex justify-center items-center gap-2 py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+              className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 transition-colors duration-200"
             >
-              <Twitter className="h-5 w-5 text-blue-400" />
-              {loading ? 'Loading...' : 'Sign in with X'}
+              {loading ? (
+                <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
+              ) : (
+                <Twitter className="h-5 w-5 text-blue-400" />
+              )}
+              {loading ? 'Authenticating...' : 'Sign in with X'}
             </button>
           </div>
 
@@ -181,6 +231,13 @@ export function Auth() {
               <span className="px-2 bg-white text-gray-500">Or continue with email</span>
             </div>
           </div>
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 text-red-800 rounded-lg flex items-start">
+              <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 mr-2 flex-shrink-0" />
+              <p className="text-sm">{error}</p>
+            </div>
+          )}
 
           <form onSubmit={handleAuth} className="space-y-6">
             <div>
@@ -215,6 +272,11 @@ export function Auth() {
                 onChange={(e) => setPassword(e.target.value)}
                 className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
               />
+              {isSignUp && (
+                <p className="text-xs text-gray-500 mt-1">
+                  Password must be at least 6 characters
+                </p>
+              )}
             </div>
 
             {isSignUp && (
@@ -233,6 +295,9 @@ export function Auth() {
                   onChange={(e) => setUsername(e.target.value)}
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
                 />
+                <p className="text-xs text-gray-500 mt-1">
+                  Only letters, numbers, and underscores
+                </p>
               </div>
             )}
 
@@ -262,16 +327,19 @@ export function Auth() {
               </div>
             )}
 
-            {error && (
-              <p className="text-red-600 text-sm text-center">{error}</p>
-            )}
-
             <button
               type="submit"
               disabled={loading || (isSignUp && !agreedToTerms)}
-              className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+              className="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 transition-colors duration-200"
             >
-              {loading ? 'Loading...' : isSignUp ? 'Sign Up' : 'Sign In'}
+              {loading ? (
+                <>
+                  <Loader2 className="h-5 w-5 animate-spin mr-2" />
+                  {isSignUp ? 'Creating Account...' : 'Signing In...'}
+                </>
+              ) : (
+                isSignUp ? 'Create Account' : 'Sign In'
+              )}
             </button>
           </form>
 

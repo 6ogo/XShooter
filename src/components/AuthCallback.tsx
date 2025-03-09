@@ -1,50 +1,66 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { Loader2, CheckCircle, XCircle } from 'lucide-react';
 
 export function AuthCallback() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [success, setSuccess] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
     const handleAuthCallback = async () => {
       try {
+        console.log("Auth callback started");
+        
         // Handle the hash fragment coming from OAuth redirect
         if (window.location.hash) {
-          // The hash will include the access token and other OAuth info
-          const { data, error } = await supabase.auth.getSession();
-          
-          if (error) throw error;
-          if (!data.session) {
-            // If no session, try setting it from the hash
-            const { error: signInError } = await supabase.auth.getSession();
-            if (signInError) throw signInError;
-          }
+          console.log("Hash fragment detected");
         }
         
         // Get session to verify authentication
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        
+        if (sessionError) {
+          console.error("Session error:", sessionError);
+          throw sessionError;
+        }
         
         if (!session) {
+          console.error("No session found");
           throw new Error('No session found');
         }
         
         // Get user data
-        const { data: { user } } = await supabase.auth.getUser();
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+        
+        if (userError) {
+          console.error("User error:", userError);
+          throw userError;
+        }
         
         if (!user) {
+          console.error("No user found");
           throw new Error('No user found');
         }
         
+        console.log("User authenticated:", user.id);
+        
         // Check if profile exists
-        const { data: existingProfile } = await supabase
+        const { data: existingProfile, error: profileError } = await supabase
           .from('profiles')
           .select('username')
           .eq('id', user.id)
           .single();
           
+        if (profileError && profileError.code !== 'PGRST116') {
+          console.error("Profile error:", profileError);
+          throw profileError;
+        }
+        
         if (!existingProfile) {
+          console.log("Creating new profile");
           // Create a profile for the X user
           // Generate a username based on X info or email
           let username = user.user_metadata?.preferred_username || 
@@ -70,14 +86,17 @@ export function AuthCallback() {
           });
           
           // Create profile
-          const { error: profileError } = await supabase
+          const { error: createProfileError } = await supabase
             .from('profiles')
             .insert([{ 
               id: user.id, 
               username 
             }]);
             
-          if (profileError) throw profileError;
+          if (createProfileError) {
+            console.error("Create profile error:", createProfileError);
+            throw createProfileError;
+          }
           
           // Create leaderboard entry
           const { error: leaderboardError } = await supabase
@@ -91,12 +110,18 @@ export function AuthCallback() {
               games_played: 0
             }]);
             
-          if (leaderboardError) throw leaderboardError;
+          if (leaderboardError) {
+            console.error("Leaderboard error:", leaderboardError);
+            throw leaderboardError;
+          }
         }
         
-        // Redirect to game lobby
+        // Set success state
+        setSuccess(true);
         setLoading(false);
-        navigate('/game/lobby');
+        
+        // Redirect to game lobby after a short delay
+        setTimeout(() => navigate('/game/lobby'), 1000);
       } catch (err) {
         console.error('Auth callback error:', err);
         setError(err instanceof Error ? err.message : 'Authentication failed');
@@ -110,23 +135,43 @@ export function AuthCallback() {
   }, [navigate]);
 
   return (
-    <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white rounded-lg shadow-xl p-8 text-center">
+    <div className="min-h-screen bg-gray-900 bg-gradient-to-b from-gray-800 to-gray-900 flex flex-col items-center justify-center p-4">
+      <div className="max-w-md w-full bg-white rounded-lg shadow-2xl p-8 text-center">
         {error ? (
           <>
+            <div className="flex justify-center mb-4">
+              <XCircle className="h-16 w-16 text-red-500" />
+            </div>
             <h2 className="text-xl font-semibold text-red-600 mb-2">Authentication Failed</h2>
             <p className="text-gray-700 mb-4">{error}</p>
-            <p className="text-gray-500">Redirecting to login page...</p>
+            <div className="mt-4 p-3 bg-red-50 rounded-lg">
+            {loading && <div className="loading-spinner">Loading...</div>}
+              <p className="text-gray-500">Redirecting to login page...</p>
+            </div>
+          </>
+        ) : success ? (
+          <>
+            <div className="flex justify-center mb-4">
+              <CheckCircle className="h-16 w-16 text-green-500" />
+            </div>
+            <h2 className="text-xl font-semibold text-green-600 mb-2">Authentication Successful!</h2>
+            <p className="text-gray-700 mb-4">Welcome to XShooter!</p>
+            <div className="mt-4 p-3 bg-green-50 rounded-lg">
+            {loading && <div className="loading-spinner">Loading...</div>}
+              <p className="text-gray-500">Redirecting to game lobby...</p>
+            </div>
           </>
         ) : (
           <>
+            <div className="flex justify-center mb-4">
+              <Loader2 className="h-16 w-16 text-indigo-500 animate-spin" />
+            </div>
+            {loading && <div className="loading-spinner">Loading...</div>}
             <h2 className="text-xl font-semibold text-indigo-600 mb-2">
-              {loading ? "Logging you in..." : "Authentication successful!"}
+              Signing you in...
             </h2>
             <p className="text-gray-700">
-              {loading 
-                ? "Please wait while we complete your authentication." 
-                : "You'll be redirected to the game lobby."}
+              Please wait while we complete your authentication.
             </p>
           </>
         )}

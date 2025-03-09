@@ -1,6 +1,5 @@
 // src/store/gameStore.ts
 import { create } from 'zustand';
-import { supabase } from '../lib/supabase';
 
 // AI state for tracking AI behavior
 interface AIState {
@@ -12,6 +11,7 @@ interface AIState {
 }
 
 interface Player {
+  lastHitTime: number | null;
   id: string;
   x: number;
   y: number;
@@ -56,6 +56,7 @@ export const useGameStore = create<GameState>((set) => ({
           y: 0, 
           health: 100, 
           username: '', 
+          lastHitTime: null,
           ...data 
         });
       }
