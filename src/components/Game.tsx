@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useGameStore } from '../store/gameStore';
 import { supabase } from '../lib/supabase';
@@ -9,18 +9,23 @@ import { MobileControls } from './MobileControls';
 import { Share2, RefreshCw, LogOut, HelpCircle, X, Check, ChevronRight } from 'lucide-react';
 import { ShareGame } from './ShareGame';
 
-// Game constants
+// Game constants - moved to the top for easier configuration
 const CANVAS_WIDTH = 800;
 const CANVAS_HEIGHT = 600;
 const PLAYER_SIZE = 20;
 const PROJECTILE_SIZE = 8;
 const SHOT_COOLDOWN = 3000;
 const MAX_SHOTS = 5;
-const AI_UPDATE_INTERVAL = 300;
-const AI_SIGHT_RANGE = 300;
-const AI_SHOT_CHANCE = 0.6;
-const AI_MOVEMENT_SPEED = 3;
+const SHOT_DAMAGE = 20;
+const AI_UPDATE_INTERVAL = 250; // More responsive AI
+const AI_SIGHT_RANGE = 350; // Increased sight range
+const AI_SHOT_CHANCE = 0.5; // Slightly reduced to balance difficulty
+const AI_MOVEMENT_SPEED = 3.5; // Increased for more dynamic gameplay
 const AI_BOT_COUNT = 3;
+const PLAYER_MOVEMENT_SPEED = 5;
+const PROJECTILE_SPEED = 6; // Increased for more dynamic gameplay
+const HIT_EFFECT_DURATION = 300; // Longer visual feedback
+const LOW_HEALTH_THRESHOLD = 30; // Define low health for achievements
 
 interface Projectile {
   x: number;
@@ -34,7 +39,6 @@ interface Projectile {
   timeCreated: number;
 }
 
-// Fix: Make sure this interface is properly used in the component
 export interface ParticleEffect {
   x: number;
   y: number;
@@ -75,6 +79,7 @@ interface AIState {
   lastShotTime: number;
   movementDirection: { x: number; y: number };
   changeDirCounter: number;
+  personality?: 'aggressive' | 'defensive' | 'sniper' | 'erratic';
 }
 
 interface GamePlayer {
@@ -88,6 +93,8 @@ interface GamePlayer {
   aiState?: AIState;
   lastHitTime?: number | null;
   invulnerable?: boolean;
+  lastMoveTime?: number;
+  velocity?: { x: number; y: number };
 }
 
 interface GameSettings {
@@ -110,11 +117,11 @@ export function Game() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { players, updatePlayer, removePlayer } = useGameStore();
 
-  // Fix: These state variables are now properly used in the component
-  const [, setProjectiles] = useState<Projectile[]>([]);
-  const [, setParticles] = useState<ParticleEffect[]>([]);
-  const [, setDamageNumbers] = useState<DamageNumber[]>([]);
-  const [, setNotifications] = useState<Notification[]>([]);
+  // Game state
+  const [projectiles, setProjectiles] = useState<Projectile[]>([]);
+  const [particles, setParticles] = useState<ParticleEffect[]>([]);
+  const [damageNumbers, setDamageNumbers] = useState<DamageNumber[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
 
   const [shotCount, setShotCount] = useState(0);
   const [canShoot, setCanShoot] = useState(true);
@@ -155,15 +162,16 @@ export function Game() {
     description: string;
   } | null>(null);
 
+  // Refs for game loop timing
   const lowHealthTimeRef = useRef(0);
   const lastTimeRef = useRef(0);
   const aiUpdateTimeRef = useRef(0);
   const requestAnimationFrameRef = useRef<number | null>(null);
   const fpsTimestamps = useRef<number[]>([]);
-
-  // Fix: lastFrameTime is now properly used
   const lastFrameTime = useRef<number>(performance.now());
+  const gameLoopRef = useRef<(time: number) => void>();
 
+  // Input handling
   const [keys, setKeys] = useState({
     ArrowUp: false, w: false,
     ArrowDown: false, s: false,
@@ -225,8 +233,6 @@ export function Game() {
     };
 
     loadSettings();
-
-    // Fix: Use lastFrameTime for session tracking
     lastFrameTime.current = performance.now();
 
     return () => {
@@ -235,6 +241,7 @@ export function Game() {
     };
   }, [gameSettings.showTutorialOnStart]);
 
+  // Keyboard input handling
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Only process key events if we're not in tutorial mode
@@ -246,6 +253,8 @@ export function Game() {
         : ['ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight'];
 
       if ([...movementKeys, 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd'].includes(e.key)) {
+        // Prevent default behavior to avoid scrolling the page when using arrow keys
+        e.preventDefault();
         setKeys(prev => ({ ...prev, [e.key]: true }));
       }
     };
@@ -265,6 +274,7 @@ export function Game() {
     };
   }, [gameSettings.controlType, showTutorial]);
 
+  // Check if device is mobile
   useEffect(() => {
     const checkMobile = () => {
       const userAgent = navigator.userAgent || navigator.vendor;
@@ -279,6 +289,7 @@ export function Game() {
     }
   }, [id]);
 
+  // Player movement based on keyboard input
   useEffect(() => {
     if (!currentUserId) return;
 
@@ -286,7 +297,7 @@ export function Game() {
       const currentPlayer = players.get(currentUserId);
       if (!currentPlayer || currentPlayer.health <= 0) return;
 
-      const moveSpeed = 5;
+      const moveSpeed = PLAYER_MOVEMENT_SPEED;
       let dx = 0, dy = 0;
 
       // Determine which keys to check based on settings
@@ -302,7 +313,7 @@ export function Game() {
         if (keys.ArrowRight) dx += moveSpeed;
       }
 
-      // Normalize diagonal movement
+      // Normalize diagonal movement to prevent faster diagonal speed
       if (dx !== 0 && dy !== 0) {
         const factor = 1 / Math.sqrt(2);
         dx *= factor;
@@ -312,7 +323,17 @@ export function Game() {
       if (dx !== 0 || dy !== 0) {
         const newX = Math.max(PLAYER_SIZE, Math.min(CANVAS_WIDTH - PLAYER_SIZE, currentPlayer.x + dx));
         const newY = Math.max(PLAYER_SIZE, Math.min(CANVAS_HEIGHT - PLAYER_SIZE, currentPlayer.y + dy));
-        updatePlayer(currentUserId, { x: newX, y: newY });
+
+        // Update player position and store velocity for visual effects
+        updatePlayer(currentUserId, {
+          x: newX,
+          y: newY,
+          lastMoveTime: performance.now(),
+          velocity: { x: dx, y: dy }
+        });
+      } else if (currentPlayer.velocity && (currentPlayer.velocity.x !== 0 || currentPlayer.velocity.y !== 0)) {
+        // Reset velocity when stopped
+        updatePlayer(currentUserId, { velocity: { x: 0, y: 0 } });
       }
     };
 
@@ -320,6 +341,7 @@ export function Game() {
     return () => clearInterval(movementInterval);
   }, [keys, currentUserId, players, updatePlayer, gameSettings.controlType]);
 
+  // Initialize the game and authentication
   useEffect(() => {
     const checkAuth = async () => {
       try {
@@ -415,8 +437,8 @@ export function Game() {
     }
   }, [id, navigate, updatePlayer, removePlayer, players, isSingleplayer]);
 
-  // Fix: Function now properly uses the notifications state
-  const addNotification = (text: string, color: string, duration: number) => {
+  // Notification system
+  const addNotification = useCallback((text: string, color: string, duration: number) => {
     setNotifications(prev => [
       ...prev,
       {
@@ -426,17 +448,23 @@ export function Game() {
         timeCreated: performance.now()
       }
     ]);
-  };
+  }, []);
 
-  const initializeAIOpponents = (count: number) => {
+  // Initialize AI opponents with different personalities for more dynamic gameplay
+  const initializeAIOpponents = useCallback((count: number) => {
     // Remove any existing AI opponents first
     for (const [playerId, player] of players.entries()) {
       if (player.isAI) removePlayer(playerId);
     }
 
+    // AI personality types for variety
+    const personalities: ('aggressive' | 'defensive' | 'sniper' | 'erratic')[] =
+      ['aggressive', 'defensive', 'sniper', 'erratic'];
+
     // Add new AI opponents
     for (let i = 0; i < count; i++) {
       const aiId = 'ai_' + Math.random().toString(36).substring(2, 9);
+
       // Spread out the initial positions to avoid clustering
       const x = Math.max(50, Math.min(CANVAS_WIDTH - 50,
         Math.random() * CANVAS_WIDTH * 0.8 + (i * CANVAS_WIDTH * 0.2 / count)));
@@ -450,27 +478,41 @@ export function Game() {
         y: Math.sin(angle),
       };
 
-      // Create with unique names and random colors
-      const botNames = ["SniperBot", "ZigZagBot", "PredatorBot", "NinjaBot", "AssassinBot"];
+      // Assign personality
+      const personality = personalities[i % personalities.length];
+
+      // Create with unique names based on personality
+      const botNames = {
+        'aggressive': ["PredatorBot", "HunterBot", "RusherBot"],
+        'defensive': ["GuardianBot", "ShieldBot", "DefenderBot"],
+        'sniper': ["SniperBot", "SharpshooterBot", "MarksmanBot"],
+        'erratic': ["ZigZagBot", "ChaosBot", "TricksterBot"]
+      };
+
+      const nameList = botNames[personality];
+      const botName = nameList[Math.floor(Math.random() * nameList.length)];
+
       updatePlayer(aiId, {
         id: aiId,
         x,
         y,
         health: 100,
-        username: botNames[i % botNames.length],
+        username: botName,
         isAI: true,
         aiState: {
           targetX: x,
           targetY: y,
           lastShotTime: 0,
           movementDirection,
-          changeDirCounter: 0
+          changeDirCounter: 0,
+          personality
         },
       });
     }
-  };
+  }, [players, removePlayer, updatePlayer]);
 
-  const loadPlayerAvatar = async (player: GamePlayer): Promise<HTMLImageElement | null> => {
+  // Load player avatars
+  const loadPlayerAvatar = useCallback(async (player: GamePlayer): Promise<HTMLImageElement | null> => {
     if (playerAvatars[player.id]) return playerAvatars[player.id];
 
     if (player.avatar_url) {
@@ -496,8 +538,9 @@ export function Game() {
     const fallbackAvatar = createFallbackAvatar(player.username, PLAYER_SIZE);
     setPlayerAvatars(prev => ({ ...prev, [player.id]: fallbackAvatar }));
     return fallbackAvatar;
-  };
+  }, [playerAvatars]);
 
+  // Create fallback avatar
   const createFallbackAvatar = (username: string, size: number): HTMLImageElement | null => {
     const canvas = document.createElement('canvas');
     canvas.width = size * 2;
@@ -525,6 +568,7 @@ export function Game() {
     return img;
   };
 
+  // Load avatars for all players
   useEffect(() => {
     const loadAvatars = async () => {
       const newCache: PlayerAvatarCache = { ...playerAvatars };
@@ -537,162 +581,9 @@ export function Game() {
       setPlayerAvatars(newCache);
     };
     loadAvatars();
-  }, [players]);
-
-  const updateAIBehavior = () => {
-    const currentPlayer = players.get(currentUserId || '');
-    if (!currentPlayer || currentPlayer.health <= 0) return;
-
-    players.forEach((playerValue, playerId) => {
-      // Type assertion
-      const player = playerValue as unknown as GamePlayer;
-
-      // Skip if not an AI, or if AI is dead
-      if (!player.isAI || player.health <= 0 || !player.aiState) return;
-
-      const aiState = player.aiState;
-      const distToPlayer = Math.hypot(currentPlayer.x - player.x, currentPlayer.y - player.y);
-      const currentTime = performance.now();
-
-      // AI behavior is different based on distance to player
-      if (distToPlayer < AI_SIGHT_RANGE) {
-        // Within sight range - react to player
-        const dirX = currentPlayer.x - player.x;
-        const dirY = currentPlayer.y - player.y;
-        const length = Math.sqrt(dirX * dirX + dirY * dirY);
-        const normalizedDirX = length > 0 ? dirX / length : 0;
-        const normalizedDirY = length > 0 ? dirY / length : 0;
-
-        // Add some randomness to movement
-        const randomFactor = 0.4;
-        aiState.movementDirection = {
-          x: normalizedDirX + (Math.random() * 2 - 1) * randomFactor,
-          y: normalizedDirY + (Math.random() * 2 - 1) * randomFactor
-        };
-
-        // Normalize the direction
-        const newLength = Math.sqrt(
-          aiState.movementDirection.x * aiState.movementDirection.x +
-          aiState.movementDirection.y * aiState.movementDirection.y
-        );
-        if (newLength > 0) {
-          aiState.movementDirection.x /= newLength;
-          aiState.movementDirection.y /= newLength;
-        }
-
-        // Shoot at player with some random spread
-        const timeSinceLastShot = currentTime - aiState.lastShotTime;
-        if (timeSinceLastShot > SHOT_COOLDOWN && Math.random() < AI_SHOT_CHANCE) {
-          const spreadFactor = 0.2;
-          const spreadX = (Math.random() * 2 - 1) * spreadFactor;
-          const spreadY = (Math.random() * 2 - 1) * spreadFactor;
-          const shootDirX = normalizedDirX + spreadX;
-          const shootDirY = normalizedDirY + spreadY;
-          const shootLength = Math.sqrt(shootDirX * shootDirX + shootDirY * shootDirY);
-          const velocityX = 5 * (shootLength > 0 ? shootDirX / shootLength : 0);
-          const velocityY = 5 * (shootLength > 0 ? shootDirY / shootLength : 0);
-
-          setProjectiles(prev => [
-            ...prev,
-            {
-              x: player.x,
-              y: player.y,
-              dx: velocityX,
-              dy: velocityY,
-              playerId,
-              size: PROJECTILE_SIZE,
-              color: '#FF0000',
-              trail: [],
-              timeCreated: currentTime
-            }
-          ]);
-          aiState.lastShotTime = currentTime;
-        }
-      } else {
-        // Random movement patterns when not near player
-        aiState.changeDirCounter++;
-
-        // Change direction more frequently to make movement more dynamic
-        if (aiState.changeDirCounter >= 4) {
-          aiState.changeDirCounter = 0;
-
-          // Sometimes move toward center of map to avoid getting stuck in corners
-          if (Math.random() < 0.3) {
-            const centerX = CANVAS_WIDTH / 2;
-            const centerY = CANVAS_HEIGHT / 2;
-            const toCenter = {
-              x: centerX - player.x,
-              y: centerY - player.y
-            };
-            const dist = Math.sqrt(toCenter.x * toCenter.x + toCenter.y * toCenter.y);
-            if (dist > 0) {
-              aiState.movementDirection = {
-                x: toCenter.x / dist,
-                y: toCenter.y / dist
-              };
-            }
-          } else {
-            // Otherwise move in a random direction
-            const randomAngle = Math.random() * Math.PI * 2;
-            aiState.movementDirection = {
-              x: Math.cos(randomAngle),
-              y: Math.sin(randomAngle)
-            };
-          }
-        }
-
-        const timeSinceLastShot = performance.now() - aiState.lastShotTime;
-
-        // Occasionally shoot in random directions even when player is not in sight
-        if (timeSinceLastShot > SHOT_COOLDOWN * 1.5 && Math.random() < 0.1) {
-          const randomAngle = Math.random() * Math.PI * 2;
-          const velocityX = 5 * Math.cos(randomAngle);
-          const velocityY = 5 * Math.sin(randomAngle);
-
-          setProjectiles(prev => [
-            ...prev,
-            {
-              x: player.x,
-              y: player.y,
-              dx: velocityX,
-              dy: velocityY,
-              playerId,
-              size: PROJECTILE_SIZE,
-              color: '#FF0000',
-              trail: [],
-              timeCreated: currentTime
-            }
-          ]);
-          aiState.lastShotTime = currentTime;
-        }
-      }
-
-      // Move the AI bot
-      const moveSpeed = AI_MOVEMENT_SPEED;
-      let newX = player.x + aiState.movementDirection.x * moveSpeed;
-      let newY = player.y + aiState.movementDirection.y * moveSpeed;
-
-      // Bounce off the walls to stay in bounds
-      if (newX < PLAYER_SIZE || newX > CANVAS_WIDTH - PLAYER_SIZE) {
-        aiState.movementDirection.x *= -1;
-        newX = Math.max(PLAYER_SIZE, Math.min(CANVAS_WIDTH - PLAYER_SIZE, newX));
-      }
-      if (newY < PLAYER_SIZE || newY > CANVAS_HEIGHT - PLAYER_SIZE) {
-        aiState.movementDirection.y *= -1;
-        newY = Math.max(PLAYER_SIZE, Math.min(CANVAS_HEIGHT - PLAYER_SIZE, newY));
-      }
-
-      updatePlayer(playerId, {
-        x: newX,
-        y: newY,
-        aiState: { ...aiState, targetX: newX, targetY: newY }
-      });
-    });
-  };
-
-  // Fix: This function now properly uses the particles state
-  const createParticleEffect = (x: number, y: number, count: number, color: string) => {
-    // Fix: Add explicit type for particlesArray
+  }, [players, loadPlayerAvatar, playerAvatars]);
+  // Create particle effects for visual feedback
+  const createParticleEffect = useCallback((x: number, y: number, count: number, color: string) => {
     const particlesArray: {
       x: number;
       y: number;
@@ -729,481 +620,329 @@ export function Game() {
         timeCreated: performance.now()
       }
     ]);
-  };
+  }, []);
 
-  // Fix: This function now properly uses the damageNumbers state
-  const createDamageNumber = (x: number, y: number, damage: number) => {
-    const angle = -Math.PI / 2 + (Math.random() * 0.5 - 0.25);
-    const speed = 1 + Math.random() * 0.5;
+  // AI behavior update - improved with different personality types
+  const updateAIBehavior = useCallback(() => {
+    const currentPlayer = players.get(currentUserId || '');
+    if (!currentPlayer || currentPlayer.health <= 0) return;
 
-    setDamageNumbers(prev => [
-      ...prev,
-      {
-        x,
-        y,
-        value: damage,
-        color: '#FF5555',
-        velocity: {
-          x: Math.cos(angle) * speed,
-          y: Math.sin(angle) * speed
-        },
-        opacity: 1,
-        scale: 1,
-        timeCreated: performance.now()
-      }
-    ]);
-  };
+    players.forEach((playerValue, playerId) => {
+      // Type assertion
+      const player = playerValue as unknown as GamePlayer;
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+      // Skip if not an AI, or if AI is dead
+      if (!player.isAI || player.health <= 0 || !player.aiState) return;
 
-    let lastFrameTimestamp = performance.now();
+      const aiState = player.aiState;
+      const personality = aiState.personality || 'aggressive';
+      const distToPlayer = Math.hypot(currentPlayer.x - player.x, currentPlayer.y - player.y);
+      const currentTime = performance.now();
 
-    const draw = (currentTime: number) => {
-      const deltaTime = currentTime - lastFrameTimestamp;
-      lastFrameTimestamp = currentTime;
+      // Base AI behavior - different for each personality type
+      if (distToPlayer < AI_SIGHT_RANGE) {
+        // Within sight range - react based on personality
+        const dirX = currentPlayer.x - player.x;
+        const dirY = currentPlayer.y - player.y;
+        const length = Math.sqrt(dirX * dirX + dirY * dirY);
+        const normalizedDirX = length > 0 ? dirX / length : 0;
+        const normalizedDirY = length > 0 ? dirY / length : 0;
 
-      // Calculate FPS
-      const now = performance.now();
-      const times = fpsTimestamps.current;
-      times.push(now);
+        // Adjust movement based on personality
+        switch (personality) {
+          case 'aggressive':
+            // Aggressive bots move directly toward the player
+            aiState.movementDirection = {
+              x: normalizedDirX + (Math.random() * 0.4 - 0.2),
+              y: normalizedDirY + (Math.random() * 0.4 - 0.2)
+            };
+            break;
 
-      while (times[0] < now - 1000) {
-        times.shift();
-      }
+          case 'defensive':
+            // Defensive bots maintain distance
+            if (distToPlayer < 200) {
+              // Move away if too close
+              aiState.movementDirection = {
+                x: -normalizedDirX + (Math.random() * 0.4 - 0.2),
+                y: -normalizedDirY + (Math.random() * 0.4 - 0.2)
+              };
+            } else {
+              // Strafe sideways if at good distance
+              aiState.movementDirection = {
+                x: normalizedDirY + (Math.random() * 0.3 - 0.15),
+                y: -normalizedDirX + (Math.random() * 0.3 - 0.15)
+              };
+            }
+            break;
 
-      setFps(times.length);
+          case 'sniper':
+            // Sniper bots try to stay at medium distance and minimize movement
+            if (distToPlayer < 150) {
+              // Back away if too close
+              aiState.movementDirection = {
+                x: -normalizedDirX,
+                y: -normalizedDirY
+              };
+            } else if (distToPlayer > 250) {
+              // Move closer if too far
+              aiState.movementDirection = {
+                x: normalizedDirX * 0.5,
+                y: normalizedDirY * 0.5
+              };
+            } else {
+              // Minimal movement at ideal range
+              aiState.movementDirection = {
+                x: (Math.random() * 0.4 - 0.2),
+                y: (Math.random() * 0.4 - 0.2)
+              };
+            }
+            break;
 
-      // Skip animation frames if we're in tutorial mode
-      if (showTutorial) {
-        requestAnimationFrameRef.current = requestAnimationFrame(draw);
-        return;
-      }
-
-      if (isSingleplayer) {
-        aiUpdateTimeRef.current += deltaTime;
-        if (aiUpdateTimeRef.current >= AI_UPDATE_INTERVAL) {
-          updateAIBehavior();
-          aiUpdateTimeRef.current = 0;
+          case 'erratic':
+            // Erratic bots move unpredictably
+            if (Math.random() < 0.05) {
+              // Occasionally change direction completely
+              const randomAngle = Math.random() * Math.PI * 2;
+              aiState.movementDirection = {
+                x: Math.cos(randomAngle),
+                y: Math.sin(randomAngle)
+              };
+            } else {
+              // Otherwise do zig-zag movements
+              aiState.movementDirection = {
+                x: normalizedDirX + Math.sin(currentTime / 200) * 0.8,
+                y: normalizedDirY + Math.cos(currentTime / 200) * 0.8
+              };
+            }
+            break;
         }
-      }
 
-      // Clear canvas
-      ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-
-      // Draw background based on graphics quality
-      if (gameSettings.graphicsQuality === 'high') {
-        // Grid background for high quality
-        ctx.fillStyle = '#1a1a2e';
-        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-
-        ctx.strokeStyle = '#2a2a4e';
-        ctx.lineWidth = 1;
-
-        // Draw vertical grid lines
-        for (let x = 0; x <= CANVAS_WIDTH; x += 40) {
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, CANVAS_HEIGHT);
-          ctx.stroke();
+        // Normalize the direction
+        const newLength = Math.sqrt(
+          aiState.movementDirection.x * aiState.movementDirection.x +
+          aiState.movementDirection.y * aiState.movementDirection.y
+        );
+        if (newLength > 0) {
+          aiState.movementDirection.x /= newLength;
+          aiState.movementDirection.y /= newLength;
         }
 
-        // Draw horizontal grid lines
-        for (let y = 0; y <= CANVAS_HEIGHT; y += 40) {
-          ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(CANVAS_WIDTH, y);
-          ctx.stroke();
+        // Shoot at player with varying accuracy based on personality
+        const timeSinceLastShot = currentTime - aiState.lastShotTime;
+        const minCooldown = personality === 'sniper' ? SHOT_COOLDOWN * 1.2 :
+          personality === 'aggressive' ? SHOT_COOLDOWN * 0.8 :
+            SHOT_COOLDOWN;
+
+        // Different shooting behavior based on personality
+        if (timeSinceLastShot > minCooldown) {
+          let shouldShoot = false;
+          let spreadFactor = 0.2; // Default spread
+
+          switch (personality) {
+            case 'aggressive':
+              shouldShoot = Math.random() < AI_SHOT_CHANCE * 1.3; // More likely to shoot
+              spreadFactor = 0.25; // Less accurate
+              break;
+            case 'defensive':
+              shouldShoot = Math.random() < AI_SHOT_CHANCE * 0.8 && distToPlayer > 150;
+              spreadFactor = 0.2;
+              break;
+            case 'sniper':
+              shouldShoot = Math.random() < AI_SHOT_CHANCE * 1.1;
+              spreadFactor = 0.1; // More accurate
+              break;
+            case 'erratic':
+              shouldShoot = Math.random() < AI_SHOT_CHANCE;
+              spreadFactor = 0.3 * Math.random(); // Wildly variable accuracy
+              break;
+          }
+
+          if (shouldShoot) {
+            const spreadX = (Math.random() * 2 - 1) * spreadFactor;
+            const spreadY = (Math.random() * 2 - 1) * spreadFactor;
+            const shootDirX = normalizedDirX + spreadX;
+            const shootDirY = normalizedDirY + spreadY;
+            const shootLength = Math.sqrt(shootDirX * shootDirX + shootDirY * shootDirY);
+            const velocityX = PROJECTILE_SPEED * (shootLength > 0 ? shootDirX / shootLength : 0);
+            const velocityY = PROJECTILE_SPEED * (shootLength > 0 ? shootDirY / shootLength : 0);
+
+            // Color based on personality
+            const projectileColors = {
+              'aggressive': '#FF3A3A', // Bright red
+              'defensive': '#3A9BFF', // Blue
+              'sniper': '#FFAA3A', // Orange
+              'erratic': '#AA3AFF'  // Purple
+            };
+
+            setProjectiles(prev => [
+              ...prev,
+              {
+                x: player.x,
+                y: player.y,
+                dx: velocityX,
+                dy: velocityY,
+                playerId,
+                size: PROJECTILE_SIZE,
+                color: projectileColors[personality],
+                trail: [],
+                timeCreated: currentTime
+              }
+            ]);
+            aiState.lastShotTime = currentTime;
+
+            // Add muzzle flash effect for visual feedback
+            createParticleEffect(
+              player.x + normalizedDirX * PLAYER_SIZE,
+              player.y + normalizedDirY * PLAYER_SIZE,
+              10,
+              projectileColors[personality]
+            );
+          }
         }
       } else {
-        // Simple background for medium/low quality
-        ctx.fillStyle = gameSettings.graphicsQuality === 'medium' ? '#1a1a2e' : '#111122';
-        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      }
+        // Random movement patterns when not near player, based on personality
+        aiState.changeDirCounter++;
 
-      // Draw players
-      players.forEach((player) => {
-        if (player.health <= 0) return;
+        // Change direction more frequently to make movement more dynamic
+        const changeFrequency = personality === 'erratic' ? 3 :
+          personality === 'aggressive' ? 5 :
+            personality === 'sniper' ? 8 : 6;
 
-        // Draw player hit effect
-        if (player.lastHitTime && performance.now() - player.lastHitTime < 200) {
-          const hitEffectSize = PLAYER_SIZE + 5;
-          ctx.beginPath();
-          ctx.arc(player.x, player.y, hitEffectSize, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
-          ctx.fill();
-        }
+        if (aiState.changeDirCounter >= changeFrequency) {
+          aiState.changeDirCounter = 0;
 
-        // Draw player avatar
-        const avatar = playerAvatars[player.id];
-        if (avatar) {
-          ctx.save();
-          ctx.beginPath();
-          ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
-          ctx.clip();
-          ctx.drawImage(avatar, player.x - PLAYER_SIZE, player.y - PLAYER_SIZE, PLAYER_SIZE * 2, PLAYER_SIZE * 2);
-
-          // Highlight current player
-          if (player.id === currentUserId) {
-            ctx.strokeStyle = '#4CAF50';
-            ctx.lineWidth = 3;
-            ctx.stroke();
-          }
-          ctx.restore();
-        } else {
-          // Fallback if avatar not loaded
-          ctx.fillStyle = player.id === currentUserId ? '#4CAF50' : (player.isAI ? '#F44336' : '#2196F3');
-          ctx.beginPath();
-          ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
-          ctx.fill();
-          loadPlayerAvatar(player);
-        }
-
-        // Draw health bar
-        const healthBarWidth = 40;
-        const healthBarHeight = 4;
-        const healthBarX = player.x - healthBarWidth / 2;
-        const healthBarY = player.y - PLAYER_SIZE - 15;
-
-        // Background
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-        ctx.fillRect(healthBarX, healthBarY, healthBarWidth, healthBarHeight);
-
-        // Health fill
-        const healthPercentage = player.health / 100;
-        const healthColor = healthPercentage > 0.6 ? '#4CAF50' : healthPercentage > 0.3 ? '#FFC107' : '#F44336';
-        ctx.fillStyle = healthColor;
-        ctx.fillRect(healthBarX, healthBarY, healthBarWidth * healthPercentage, healthBarHeight);
-
-        // Health text and username
-        ctx.fillStyle = '#FFFFFF';
-        ctx.font = '12px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText(`${player.health} HP`, player.x, player.y - 20);
-        ctx.fillText(player.username, player.x, player.y - 35);
-      });
-
-      // Draw projectiles
-      setProjectiles(prev => {
-        const updatedProjectiles = prev.map(proj => {
-          const newX = proj.x + proj.dx;
-          const newY = proj.y + proj.dy;
-          if (newX < 0 || newX > CANVAS_WIDTH || newY < 0 || newY > CANVAS_HEIGHT) return null;
-
-          // Add trail points for high quality
-          let trail = proj.trail;
-          if (gameSettings.graphicsQuality === 'high') {
-            trail = [{ x: proj.x, y: proj.y }, ...trail.slice(0, 5)];
-          }
-
-          return { ...proj, x: newX, y: newY, trail };
-        }).filter((proj): proj is Projectile => proj !== null);
-
-        // Draw projectiles based on graphics quality
-        updatedProjectiles.forEach(proj => {
-          // Draw trail for high and medium quality
-          if ((gameSettings.graphicsQuality === 'high' || gameSettings.graphicsQuality === 'medium') && proj.trail.length > 1) {
-            ctx.beginPath();
-            ctx.moveTo(proj.x, proj.y);
-
-            for (let i = 0; i < proj.trail.length; i++) {
-              ctx.lineTo(proj.trail[i].x, proj.trail[i].y);
+          // Sometimes move toward center of map to avoid getting stuck in corners
+          if (Math.random() < 0.3) {
+            const centerX = CANVAS_WIDTH / 2;
+            const centerY = CANVAS_HEIGHT / 2;
+            const toCenter = {
+              x: centerX - player.x,
+              y: centerY - player.y
+            };
+            const dist = Math.sqrt(toCenter.x * toCenter.x + toCenter.y * toCenter.y);
+            if (dist > 0) {
+              aiState.movementDirection = {
+                x: toCenter.x / dist,
+                y: toCenter.y / dist
+              };
             }
-
-            // Make trail glow effect more visible
-            ctx.strokeStyle = proj.playerId === currentUserId ? 'rgba(76, 175, 80, 0.6)' : 'rgba(255, 85, 85, 0.6)';
-            ctx.lineWidth = 3;
-            ctx.stroke();
-          }
-
-          // Draw projectile with larger size
-          ctx.beginPath();
-          ctx.arc(proj.x, proj.y, proj.size, 0, Math.PI * 2);
-
-          // Brighter colors for better visibility
-          if (proj.playerId === currentUserId) {
-            // Player projectiles: bright green with gradient
-            const gradient = ctx.createRadialGradient(proj.x, proj.y, 0, proj.x, proj.y, proj.size);
-            gradient.addColorStop(0, '#AAFFAA');
-            gradient.addColorStop(1, '#4CAF50');
-            ctx.fillStyle = gradient;
           } else {
-            // Enemy projectiles: bright red with gradient
-            const gradient = ctx.createRadialGradient(proj.x, proj.y, 0, proj.x, proj.y, proj.size);
-            gradient.addColorStop(0, '#FFAAAA');
-            gradient.addColorStop(1, '#FF5555');
-            ctx.fillStyle = gradient;
-          }
-          ctx.fill();
+            // Otherwise move in a semi-random direction based on personality
+            switch (personality) {
+              case 'aggressive':
+                // More direct movement, search pattern
+                if (Math.random() < 0.7) {
+                  // Broader search pattern
+                  const targets = [];
+                  for (const [pid, p] of players.entries()) {
+                    if (pid !== playerId && !p.isAI) {
+                      targets.push(p);
+                    }
+                  }
 
-          // Draw glow for all quality levels
-          ctx.beginPath();
-          ctx.arc(proj.x, proj.y, proj.size + 4, 0, Math.PI * 2);
-          ctx.fillStyle = proj.playerId === currentUserId ? 'rgba(76, 175, 80, 0.3)' : 'rgba(255, 85, 85, 0.3)';
-          ctx.fill();
-        });
-        return updatedProjectiles;
-      });
-
-      // Update and draw particles
-      setParticles(prev => {
-        const currentTime = performance.now();
-        return prev
-          .filter(effect => currentTime - effect.timeCreated < 2000)
-          .map(effect => {
-            const updatedParticles = effect.particles.map(p => {
-              p.x += p.dx;
-              p.y += p.dy;
-              p.life -= 0.016 / p.maxLife; // Reduce life based on frame time
-              return p;
-            }).filter(p => p.life > 0);
-
-            // Draw particles
-            updatedParticles.forEach(p => {
-              ctx.globalAlpha = p.life;
-              ctx.beginPath();
-              ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-              ctx.fillStyle = p.color;
-              ctx.fill();
-            });
-            ctx.globalAlpha = 1;
-
-            return { ...effect, particles: updatedParticles };
-          })
-          .filter(effect => effect.particles.length > 0);
-      });
-
-      // Update and draw damage numbers
-      setDamageNumbers(prev => {
-        const currentTime = performance.now();
-        return prev
-          .filter(dmg => currentTime - dmg.timeCreated < 1000)
-          .map(dmg => {
-            // Update position and properties
-            dmg.x += dmg.velocity.x;
-            dmg.y += dmg.velocity.y;
-            dmg.opacity = 1 - (currentTime - dmg.timeCreated) / 1000;
-            dmg.scale = 1 + (currentTime - dmg.timeCreated) / 1000 * 0.5;
-
-            // Draw damage number
-            ctx.globalAlpha = dmg.opacity;
-            ctx.fillStyle = dmg.color;
-            ctx.font = `bold ${Math.floor(16 * dmg.scale)}px Arial`;
-            ctx.textAlign = 'center';
-            ctx.fillText(`-${dmg.value}`, dmg.x, dmg.y);
-            ctx.globalAlpha = 1;
-
-            return dmg;
-          });
-      });
-
-      // Update and draw notifications
-      setNotifications(prev => {
-        const currentTime = performance.now();
-        const validNotifications = prev.filter(notif =>
-          currentTime - notif.timeCreated < notif.duration
-        );
-
-        // Draw notifications
-        validNotifications.forEach((notif, index) => {
-          const elapsed = currentTime - notif.timeCreated;
-          const progress = Math.min(1, elapsed / 500); // Fade in over 500ms
-          const fadeOut = Math.max(0, 1 - (elapsed - (notif.duration - 500)) / 500); // Fade out over last 500ms
-          const opacity = Math.min(progress, fadeOut);
-
-          ctx.globalAlpha = opacity;
-          ctx.fillStyle = notif.color;
-          ctx.font = 'bold 16px Arial';
-          ctx.textAlign = 'center';
-          ctx.fillText(notif.text, CANVAS_WIDTH / 2, 30 + index * 25);
-          ctx.globalAlpha = 1;
-        });
-
-        return validNotifications;
-      });
-
-      // Check for projectile collisions
-      setProjectiles(prev => {
-        const newProjectiles = prev.map((projectile: Projectile) => {
-          const newX = projectile.x + projectile.dx;
-          const newY = projectile.y + projectile.dy;
-
-          if (newX < 0 || newX > CANVAS_WIDTH || newY < 0 || newY > CANVAS_HEIGHT) return null;
-
-          let hitPlayer = false;
-          players.forEach((player: GamePlayer) => {
-            if (
-              player.health > 0 &&
-              projectile.playerId !== player.id &&
-              !player.invulnerable &&
-              Math.hypot(newX - player.x, newY - player.y) < PLAYER_SIZE + PROJECTILE_SIZE
-            ) {
-              hitPlayer = true;
-              const damage = 20;
-              const newHealth = Math.max(0, player.health - damage);
-
-              // Create hit effects
-              createParticleEffect(newX, newY, 15, '#FF5555');
-              createDamageNumber(player.x, player.y - PLAYER_SIZE - 10, damage);
-
-              // Update player with hit effect
-              updatePlayer(player.id, {
-                health: newHealth,
-                lastHitTime: performance.now()
-              });
-
-              // Handle hit by current player
-              if (projectile.playerId === currentUserId) {
-                // Add hit sound effect
-                if (gameSettings.sfxEnabled) {
-                  const hitSound = new Audio('/hit.mp3'); // This would be a real sound file in production
-                  hitSound.volume = gameSettings.volume / 100;
-                  hitSound.play().catch(e => console.error('Error playing sound:', e));
+                  if (targets.length > 0) {
+                    const target = targets[Math.floor(Math.random() * targets.length)];
+                    const dirX = target.x - player.x;
+                    const dirY = target.y - player.y;
+                    const length = Math.sqrt(dirX * dirX + dirY * dirY);
+                    aiState.movementDirection = {
+                      x: length > 0 ? dirX / length : 0,
+                      y: length > 0 ? dirY / length : 0,
+                    };
+                    break;
+                  }
                 }
-
-                // Update stats
-                setGameStats(prev => ({
-                  ...prev,
-                  shotsHit: prev.shotsHit + 1,
-                  ...(newHealth === 0 && {
-                    killCount: prev.killCount + 1,
-                    eliminations: [...prev.eliminations, player.id],
-                    killedInRow: prev.killedInRow + 1,
-                    firstKill: prev.killCount === 0 ? true : prev.firstKill,
-                    lastKill: prev.eliminations.length + 1 === players.size - 1 ? true : prev.lastKill,
-                    multiKills: (() => {
-                      const now = performance.now();
-                      const multiKills = [...prev.multiKills];
-                      if (lastTimeRef.current > 0 && now - lastTimeRef.current < 5000) {
-                        const lastMultiKill = multiKills[multiKills.length - 1];
-                        if (lastMultiKill && now - lastMultiKill.timespan < 5000) {
-                          lastMultiKill.count++;
-                          lastMultiKill.timespan = now;
-                        } else {
-                          multiKills.push({ count: 2, timespan: now });
-                        }
-                      }
-                      lastTimeRef.current = now;
-                      return multiKills;
-                    })()
-                  })
-                }));
-
-                // Show kill notification
-                if (newHealth === 0) {
-                  addNotification(`You eliminated ${player.username}!`, "#4CAF50", 3000);
-                }
-              }
-
-              // Handle being hit as current player
-              if (player.id === currentUserId) {
-                // Add damage sound effect
-                if (gameSettings.sfxEnabled) {
-                  const damageSound = new Audio('/damage.mp3'); // This would be a real sound file in production
-                  damageSound.volume = gameSettings.volume / 100;
-                  damageSound.play().catch(e => console.error('Error playing sound:', e));
-                }
-
-                // Update stats
-                setGameStats(prev => ({
-                  ...prev,
-                  damageReceived: prev.damageReceived + damage,
-                  lowestHealth: newHealth < prev.lowestHealth ? newHealth : prev.lowestHealth
-                }));
-
-                // Show damage notification
-                addNotification(`${damage} damage from ${players.get(projectile.playerId)?.username || 'Player'}!`, "#F44336", 2000);
-              }
+                break;
+              default:
+                // Random direction for other personalities
+                const randomAngle = Math.random() * Math.PI * 2;
+                aiState.movementDirection = {
+                  x: Math.cos(randomAngle),
+                  y: Math.sin(randomAngle),
+                };
+                break;
             }
-          });
-
-          return hitPlayer ? null : { ...projectile, x: newX, y: newY };
-        }).filter((p): p is Projectile => p !== null);
-
-        const activePlayers = Array.from(players.values()).filter(p => p.health > 0);
-        if (activePlayers.length === 1 && gameState === 'playing') {
-          const winner = activePlayers[0];
-          if (winner.id === currentUserId) {
-            addNotification("Victory! You are the last player standing!", "#4CAF50", 5000);
-          } else {
-            addNotification(`${winner.username} wins the game!`, "#FF9800", 5000);
           }
-          handleGameEnd(winner.id === currentUserId);
-        } else if (activePlayers.length >= 2 && gameState === 'waiting') {
-          setGameState('playing');
-          addNotification("Game started! Last player standing wins!", "#3498db", 3000);
         }
 
-        return newProjectiles;
-      });
+        const timeSinceLastShot = currentTime - aiState.lastShotTime;
+        const minIdleCooldown = SHOT_COOLDOWN * 1.5;
 
-      // Draw cooldown indicator
-      if (currentUserId) {
-        const currentPlayer = players.get(currentUserId);
-        if (currentPlayer && currentPlayer.health > 0) {
-          const cooldownBarWidth = 100;
-          const cooldownBarHeight = 10;
-          const cooldownBarX = (CANVAS_WIDTH - cooldownBarWidth) / 2;
-          const cooldownBarY = CANVAS_HEIGHT - 30;
+        // Occasionally shoot in random directions based on personality
+        const idleShootChance = personality === 'aggressive' ? 0.15 :
+          personality === 'erratic' ? 0.12 :
+            personality === 'defensive' ? 0.08 : 0.05;
 
-          // Background
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-          ctx.fillRect(cooldownBarX, cooldownBarY, cooldownBarWidth, cooldownBarHeight);
+        if (timeSinceLastShot > minIdleCooldown && Math.random() < idleShootChance) {
+          const randomAngle = Math.random() * Math.PI * 2;
+          const velocityX = PROJECTILE_SPEED * Math.cos(randomAngle);
+          const velocityY = PROJECTILE_SPEED * Math.sin(randomAngle);
 
-          if (!canShoot) {
-            // Draw cooldown progress
-            const timeElapsed = performance.now() - (performance.now() - (SHOT_COOLDOWN - (performance.now() % SHOT_COOLDOWN)));
-            const cooldownProgress = timeElapsed / SHOT_COOLDOWN;
-            ctx.fillStyle = '#FFC107';
-            ctx.fillRect(cooldownBarX, cooldownBarY, cooldownBarWidth * cooldownProgress, cooldownBarHeight);
+          const projectileColors = {
+            'aggressive': '#FF3A3A',
+            'defensive': '#3A9BFF',
+            'sniper': '#FFAA3A',
+            'erratic': '#AA3AFF'
+          };
 
-            // Draw text
-            ctx.fillStyle = '#FFFFFF';
-            ctx.font = '12px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText('Reloading...', CANVAS_WIDTH / 2, cooldownBarY - 5);
-          } else {
-            // Draw available shots
-            const shotWidth = cooldownBarWidth / MAX_SHOTS;
-            for (let i = 0; i < MAX_SHOTS - shotCount; i++) {
-              ctx.fillStyle = '#4CAF50';
-              ctx.fillRect(cooldownBarX + i * shotWidth, cooldownBarY, shotWidth - 1, cooldownBarHeight);
+          setProjectiles(prev => [
+            ...prev,
+            {
+              x: player.x,
+              y: player.y,
+              dx: velocityX,
+              dy: velocityY,
+              playerId,
+              size: PROJECTILE_SIZE,
+              color: projectileColors[personality],
+              trail: [],
+              timeCreated: currentTime
             }
+          ]);
+          aiState.lastShotTime = currentTime;
 
-            // Draw text
-            ctx.fillStyle = '#FFFFFF';
-            ctx.font = '12px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText(`${MAX_SHOTS - shotCount} Shots Available`, CANVAS_WIDTH / 2, cooldownBarY - 5);
-          }
+          // Add muzzle flash effect
+          createParticleEffect(
+            player.x + Math.cos(randomAngle) * PLAYER_SIZE,
+            player.y + Math.sin(randomAngle) * PLAYER_SIZE,
+            8,
+            projectileColors[personality]
+          );
         }
       }
 
-      // Draw FPS counter if enabled
-      if (gameSettings.showFps) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-        ctx.fillRect(5, 5, 60, 20);
-        ctx.fillStyle = '#FFFFFF';
-        ctx.font = '12px monospace';
-        ctx.textAlign = 'left';
-        ctx.fillText(`FPS: ${fps}`, 10, 18);
+      // Move the AI bot with personality-based speed variation
+      const speedMultiplier = personality === 'aggressive' ? 1.2 :
+        personality === 'erratic' ? 1.1 :
+          personality === 'sniper' ? 0.9 : 1.0;
+
+      const moveSpeed = AI_MOVEMENT_SPEED * speedMultiplier;
+      let newX = player.x + aiState.movementDirection.x * moveSpeed;
+      let newY = player.y + aiState.movementDirection.y * moveSpeed;
+
+      // Bounce off the walls to stay in bounds
+      if (newX < PLAYER_SIZE || newX > CANVAS_WIDTH - PLAYER_SIZE) {
+        aiState.movementDirection.x *= -1;
+        newX = Math.max(PLAYER_SIZE, Math.min(CANVAS_WIDTH - PLAYER_SIZE, newX));
+      }
+      if (newY < PLAYER_SIZE || newY > CANVAS_HEIGHT - PLAYER_SIZE) {
+        aiState.movementDirection.y *= -1;
+        newY = Math.max(PLAYER_SIZE, Math.min(CANVAS_HEIGHT - PLAYER_SIZE, newY));
       }
 
-      if (gameState !== 'finished') {
-        requestAnimationFrameRef.current = requestAnimationFrame(draw);
-      }
-    };
-
-    requestAnimationFrameRef.current = requestAnimationFrame(draw);
-    return () => {
-      if (requestAnimationFrameRef.current) cancelAnimationFrame(requestAnimationFrameRef.current);
-    };
-  }, [players, currentUserId, gameState, updatePlayer, playerAvatars, isSingleplayer, gameSettings, showTutorial]);
-
-  const handleGameEnd = async (isWinner: boolean) => {
+      updatePlayer(playerId, {
+        x: newX,
+        y: newY,
+        aiState: { ...aiState, targetX: newX, targetY: newY },
+        velocity: {
+          x: aiState.movementDirection.x * moveSpeed,
+          y: aiState.movementDirection.y * moveSpeed
+        }
+      });
+    });
+  }, [createParticleEffect, currentUserId, players, updatePlayer]);
+  // Handle game end and achievement processing
+  const handleGameEnd = useCallback(async (isWinner: boolean) => {
     setGameState('finished');
     if (!currentUserId || isSingleplayer) return;
 
@@ -1270,16 +1009,809 @@ export function Game() {
         .single();
       if (achievement) setUnlockingAchievement(achievement);
     }
-  };
+  }, [currentUserId, gameStats, id, isSingleplayer, players]);
 
-  const fireProjectile = (targetX: number, targetY: number) => {
+  // Create damage number popups
+  const createDamageNumber = useCallback((x: number, y: number, damage: number) => {
+    const angle = -Math.PI / 2 + (Math.random() * 0.5 - 0.25);
+    const speed = 1 + Math.random() * 0.5;
+
+    setDamageNumbers(prev => [
+      ...prev,
+      {
+        x,
+        y,
+        value: damage,
+        color: '#FF5555',
+        velocity: {
+          x: Math.cos(angle) * speed,
+          y: Math.sin(angle) * speed
+        },
+        opacity: 1,
+        scale: 1,
+        timeCreated: performance.now()
+      }
+    ]);
+  }, []);
+
+  // Game render loop
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let lastFrameTimestamp = performance.now();
+
+    // Main game loop - extracted into a named function for better performance
+    const draw = (currentTime: number) => {
+      // Calculate delta time for frame-rate independent updates
+      const deltaTime = currentTime - lastFrameTimestamp;
+      lastFrameTimestamp = currentTime;
+
+      // Calculate FPS for display
+      const now = performance.now();
+      const times = fpsTimestamps.current;
+      times.push(now);
+
+      while (times[0] < now - 1000) {
+        times.shift();
+      }
+
+      setFps(times.length);
+
+      // Skip animation frames if we're in tutorial mode
+      if (showTutorial) {
+        requestAnimationFrameRef.current = requestAnimationFrame(draw);
+        return;
+      }
+
+      // Update AI behavior at fixed intervals
+      if (isSingleplayer) {
+        aiUpdateTimeRef.current += deltaTime;
+        if (aiUpdateTimeRef.current >= AI_UPDATE_INTERVAL) {
+          updateAIBehavior();
+          aiUpdateTimeRef.current = 0;
+        }
+      }
+
+      // Update low health timer for achievements
+      if (currentUserId) {
+        const currentPlayer = players.get(currentUserId);
+        if (currentPlayer && currentPlayer.health <= LOW_HEALTH_THRESHOLD && currentPlayer.health > 0) {
+          lowHealthTimeRef.current += deltaTime / 1000; // Convert to seconds
+        }
+      }
+
+      // Clear canvas
+      ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+      // Draw background based on graphics quality
+      if (gameSettings.graphicsQuality === 'high') {
+        // Grid background for high quality
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+        ctx.strokeStyle = '#2a2a4e';
+        ctx.lineWidth = 1;
+
+        // Draw vertical grid lines
+        for (let x = 0; x <= CANVAS_WIDTH; x += 40) {
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, CANVAS_HEIGHT);
+          ctx.stroke();
+        }
+
+        // Draw horizontal grid lines
+        for (let y = 0; y <= CANVAS_HEIGHT; y += 40) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(CANVAS_WIDTH, y);
+          ctx.stroke();
+        }
+
+        // Add subtle glow in the center for better visual interest
+        const gradient = ctx.createRadialGradient(
+          CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, 50,
+          CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, 300
+        );
+        gradient.addColorStop(0, 'rgba(60, 60, 120, 0.1)');
+        gradient.addColorStop(1, 'rgba(30, 30, 60, 0)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      } else {
+        // Simple background for medium/low quality
+        ctx.fillStyle = gameSettings.graphicsQuality === 'medium' ? '#1a1a2e' : '#111122';
+        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      }
+
+      // Draw players
+      players.forEach((player) => {
+        if (player.health <= 0) return;
+
+        // Draw player hit effect (enhanced)
+        if (player.lastHitTime && performance.now() - player.lastHitTime < HIT_EFFECT_DURATION) {
+          const effectProgress = 1 - ((performance.now() - player.lastHitTime) / HIT_EFFECT_DURATION);
+          const hitEffectSize = PLAYER_SIZE + 8 * effectProgress;
+
+          // Outer glow
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, hitEffectSize, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255, 0, 0, ${0.4 * effectProgress})`;
+          ctx.fill();
+
+          // Inner flash
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, PLAYER_SIZE * 0.8, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255, 255, 255, ${0.5 * effectProgress})`;
+          ctx.fill();
+        }
+
+        // Draw movement trail for better visual feedback
+        if (player.velocity && gameSettings.graphicsQuality !== 'low' &&
+          (Math.abs(player.velocity.x) > 0.5 || Math.abs(player.velocity.y) > 0.5)) {
+          const trailLength = gameSettings.graphicsQuality === 'high' ? 3 : 2;
+          const speed = Math.sqrt(player.velocity.x ** 2 + player.velocity.y ** 2);
+          const normalizedSpeed = Math.min(speed / PLAYER_MOVEMENT_SPEED, 1);
+
+          // Direction opposite to movement
+          const dirX = player.velocity.x !== 0 ? -player.velocity.x / Math.abs(player.velocity.x) : 0;
+          const dirY = player.velocity.y !== 0 ? -player.velocity.y / Math.abs(player.velocity.y) : 0;
+
+          ctx.beginPath();
+          ctx.moveTo(player.x, player.y);
+          ctx.lineTo(
+            player.x + dirX * PLAYER_SIZE * normalizedSpeed * trailLength,
+            player.y + dirY * PLAYER_SIZE * normalizedSpeed * trailLength
+          );
+
+          // Gradient trail
+          const gradient = ctx.createLinearGradient(
+            player.x, player.y,
+            player.x + dirX * PLAYER_SIZE * normalizedSpeed * trailLength,
+            player.y + dirY * PLAYER_SIZE * normalizedSpeed * trailLength
+          );
+
+          const trailColor = player.id === currentUserId ? 'rgba(76, 175, 80, 0.6)' :
+            player.isAI ? 'rgba(255, 85, 85, 0.6)' : 'rgba(66, 135, 245, 0.6)';
+
+          gradient.addColorStop(0, 'rgba(255, 255, 255, 0)');
+          gradient.addColorStop(1, trailColor);
+
+          ctx.strokeStyle = gradient;
+          ctx.lineWidth = PLAYER_SIZE * 0.8 * normalizedSpeed;
+          ctx.lineCap = 'round';
+          ctx.stroke();
+        }
+
+        // Draw player avatar
+        const avatar = playerAvatars[player.id];
+        if (avatar) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
+          ctx.clip();
+          ctx.drawImage(avatar, player.x - PLAYER_SIZE, player.y - PLAYER_SIZE, PLAYER_SIZE * 2, PLAYER_SIZE * 2);
+
+          // Highlight current player
+          if (player.id === currentUserId) {
+            ctx.strokeStyle = '#4CAF50';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+          }
+          ctx.restore();
+        } else {
+          // Fallback if avatar not loaded
+          ctx.fillStyle = player.id === currentUserId ? '#4CAF50' : (player.isAI ? '#F44336' : '#2196F3');
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
+          ctx.fill();
+          loadPlayerAvatar(player);
+        }
+
+        // Draw health bar with improvements
+        const healthBarWidth = 40;
+        const healthBarHeight = 4;
+        const healthBarX = player.x - healthBarWidth / 2;
+        const healthBarY = player.y - PLAYER_SIZE - 15;
+
+        // Background with rounded corners
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.beginPath();
+        ctx.roundRect(healthBarX, healthBarY, healthBarWidth, healthBarHeight, 2);
+        ctx.fill();
+
+        // Health fill with color gradient based on health
+        const healthPercentage = player.health / 100;
+        let healthColor;
+
+        if (healthPercentage > 0.6) {
+          healthColor = '#4CAF50'; // Green
+        } else if (healthPercentage > 0.3) {
+          // Gradient from yellow to orange
+          const gradient = ctx.createLinearGradient(healthBarX, 0, healthBarX + healthBarWidth * healthPercentage, 0);
+          gradient.addColorStop(0, '#FFC107');
+          gradient.addColorStop(1, '#FF9800');
+          healthColor = gradient;
+        } else {
+          // Gradient from orange to red
+          const gradient = ctx.createLinearGradient(healthBarX, 0, healthBarX + healthBarWidth * healthPercentage, 0);
+          gradient.addColorStop(0, '#FF5722');
+          gradient.addColorStop(1, '#F44336');
+          healthColor = gradient;
+        }
+
+        ctx.fillStyle = healthColor;
+        ctx.beginPath();
+        ctx.roundRect(healthBarX, healthBarY, healthBarWidth * healthPercentage, healthBarHeight, 2);
+        ctx.fill();
+
+        // Add pulsing effect on low health
+        if (player.health <= LOW_HEALTH_THRESHOLD) {
+          const pulseIntensity = (Math.sin(performance.now() / 200) + 1) / 2; // 0 to 1 pulsing
+          ctx.fillStyle = `rgba(255, 0, 0, ${pulseIntensity * 0.3})`;
+          ctx.beginPath();
+          ctx.roundRect(healthBarX, healthBarY, healthBarWidth, healthBarHeight, 2);
+          ctx.fill();
+        }
+
+        // Health text and username
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${player.health} HP`, player.x, player.y - 20);
+
+        // Username with shadow for better readability
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillText(player.username, player.x + 1, player.y - 35 + 1);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillText(player.username, player.x, player.y - 35);
+
+        // Show AI personality for debugging/clarity
+        if (player.isAI && player.aiState?.personality && gameSettings.showFps) {
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+          ctx.font = '10px Arial';
+          ctx.fillText(player.aiState.personality, player.x, player.y - 48);
+        }
+      });
+
+      // Update and draw projectiles
+      const updatedProjectiles = projectiles.map(proj => {
+        const newX = proj.x + proj.dx;
+        const newY = proj.y + proj.dy;
+        if (newX < 0 || newX > CANVAS_WIDTH || newY < 0 || newY > CANVAS_HEIGHT) return null;
+
+        // Add trail points for high quality
+        let trail = proj.trail;
+        if (gameSettings.graphicsQuality === 'high') {
+          trail = [{ x: proj.x, y: proj.y }, ...trail.slice(0, 5)];
+        }
+
+        return { ...proj, x: newX, y: newY, trail };
+      }).filter((proj): proj is Projectile => proj !== null);
+
+      // Draw projectiles based on graphics quality
+      updatedProjectiles.forEach(proj => {
+        // Draw trail for high and medium quality
+        if ((gameSettings.graphicsQuality === 'high' || gameSettings.graphicsQuality === 'medium') && proj.trail.length > 1) {
+          ctx.beginPath();
+          ctx.moveTo(proj.x, proj.y);
+
+          for (let i = 0; i < proj.trail.length; i++) {
+            ctx.lineTo(proj.trail[i].x, proj.trail[i].y);
+          }
+
+          // Make trail glow effect more visible with smoother gradients
+          const isPlayerProjectile = proj.playerId === currentUserId;
+          const trailColor = isPlayerProjectile ? 'rgba(76, 175, 80, 0.6)' : 'rgba(255, 85, 85, 0.6)';
+
+          // For high quality, use actual gradient
+          if (gameSettings.graphicsQuality === 'high') {
+            const gradient = ctx.createLinearGradient(
+              proj.x, proj.y,
+              proj.trail[proj.trail.length - 1].x, proj.trail[proj.trail.length - 1].y
+            );
+            gradient.addColorStop(0, isPlayerProjectile ? 'rgba(100, 255, 100, 0.7)' : 'rgba(255, 100, 100, 0.7)');
+            gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            ctx.strokeStyle = gradient;
+          } else {
+            ctx.strokeStyle = trailColor;
+          }
+
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+
+        // Draw projectile with larger size and glow effect
+        ctx.beginPath();
+        ctx.arc(proj.x, proj.y, proj.size, 0, Math.PI * 2);
+
+        // Brighter colors for better visibility
+        if (proj.playerId === currentUserId) {
+          // Player projectiles: bright green with gradient
+          const gradient = ctx.createRadialGradient(proj.x, proj.y, 0, proj.x, proj.y, proj.size);
+          gradient.addColorStop(0, '#AAFFAA');
+          gradient.addColorStop(1, '#4CAF50');
+          ctx.fillStyle = gradient;
+        } else {
+          // Enemy projectiles: use color based on the projectile's defined color
+          const gradient = ctx.createRadialGradient(proj.x, proj.y, 0, proj.x, proj.y, proj.size);
+
+          // Extract base color components for center highlight
+          let colorComponents = { r: 255, g: 85, b: 85 }; // Default red
+
+          // Parse hex color to RGB
+          if (proj.color.startsWith('#') && proj.color.length === 7) {
+            colorComponents = {
+              r: parseInt(proj.color.slice(1, 3), 16),
+              g: parseInt(proj.color.slice(3, 5), 16),
+              b: parseInt(proj.color.slice(5, 7), 16)
+            };
+          }
+
+          // Create lighter version for center
+          const centerColor = `rgb(${Math.min(colorComponents.r + 50, 255)}, ${Math.min(colorComponents.g + 50, 255)}, ${Math.min(colorComponents.b + 50, 255)})`;
+
+          gradient.addColorStop(0, centerColor);
+          gradient.addColorStop(1, proj.color);
+          ctx.fillStyle = gradient;
+        }
+        ctx.fill();
+
+        // Draw glow for all quality levels
+        ctx.beginPath();
+        ctx.arc(proj.x, proj.y, proj.size + 4, 0, Math.PI * 2);
+        if (proj.playerId === currentUserId) {
+          ctx.fillStyle = 'rgba(76, 175, 80, 0.3)';
+        } else {
+          // Extract alpha component for glow
+          let glowColor = 'rgba(255, 85, 85, 0.3)'; // Default
+
+          if (proj.color.startsWith('#') && proj.color.length === 7) {
+            const r = parseInt(proj.color.slice(1, 3), 16);
+            const g = parseInt(proj.color.slice(3, 5), 16);
+            const b = parseInt(proj.color.slice(5, 7), 16);
+            glowColor = `rgba(${r}, ${g}, ${b}, 0.3)`;
+          }
+
+          ctx.fillStyle = glowColor;
+        }
+        ctx.fill();
+      });
+      setProjectiles(updatedProjectiles);
+
+      // Update and draw particles
+      setParticles(prev => {
+        const currentTime = performance.now();
+        return prev
+          .filter(effect => currentTime - effect.timeCreated < 2000)
+          .map(effect => {
+            const updatedParticles = effect.particles.map(p => {
+              p.x += p.dx;
+              p.y += p.dy;
+              p.life -= 0.016 / p.maxLife; // Reduce life based on frame time
+              return p;
+            }).filter(p => p.life > 0);
+
+            // Draw particles with improved rendering
+            updatedParticles.forEach(p => {
+              ctx.globalAlpha = p.life;
+              ctx.beginPath();
+
+              // High quality = use gradient for particles
+              if (gameSettings.graphicsQuality === 'high') {
+                const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size);
+                gradient.addColorStop(0, p.color);
+                gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+                ctx.fillStyle = gradient;
+              } else {
+                ctx.fillStyle = p.color;
+              }
+
+              ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+              ctx.fill();
+            });
+            ctx.globalAlpha = 1;
+
+            return { ...effect, particles: updatedParticles };
+          })
+          .filter(effect => effect.particles.length > 0);
+      });
+
+      // Update and draw damage numbers with improved animation
+      setDamageNumbers(prev => {
+        const currentTime = performance.now();
+        return prev
+          .filter(dmg => currentTime - dmg.timeCreated < 1000)
+          .map(dmg => {
+            // Update position and properties with smoother animation
+            const progress = (currentTime - dmg.timeCreated) / 1000;
+            const easeOutCubic = 1 - Math.pow(1 - progress, 3); // Easing function
+
+            // Movement slows down over time
+            dmg.x += dmg.velocity.x * (1 - easeOutCubic * 0.7);
+            dmg.y += dmg.velocity.y * (1 - easeOutCubic * 0.7);
+
+            dmg.opacity = 1 - easeOutCubic;
+            dmg.scale = 1 + easeOutCubic * 0.3; // Grows slightly as it fades
+
+            // Draw damage number with shadow for better visibility
+            ctx.globalAlpha = dmg.opacity;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.font = `bold ${Math.floor(16 * dmg.scale)}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.fillText(`-${dmg.value}`, dmg.x + 1, dmg.y + 1);
+
+            ctx.fillStyle = dmg.color;
+            ctx.fillText(`-${dmg.value}`, dmg.x, dmg.y);
+            ctx.globalAlpha = 1;
+
+            return dmg;
+          });
+      });
+
+      // Update and draw notifications with improved animation
+      setNotifications(prev => {
+        const currentTime = performance.now();
+        const validNotifications = prev.filter(notif =>
+          currentTime - notif.timeCreated < notif.duration
+        );
+
+        // Draw notifications with better animation
+        validNotifications.forEach((notif, index) => {
+          const elapsed = currentTime - notif.timeCreated;
+          const duration = notif.duration;
+
+          // Fade in for the first 300ms, fade out for the last 300ms
+          const fadeInDuration = 300;
+          const fadeOutDuration = 300;
+
+          let opacity;
+          if (elapsed < fadeInDuration) {
+            // Fade in (ease in)
+            opacity = Math.pow(elapsed / fadeInDuration, 2);
+          } else if (elapsed > duration - fadeOutDuration) {
+            // Fade out (ease out)
+            opacity = Math.pow(1 - (elapsed - (duration - fadeOutDuration)) / fadeOutDuration, 2);
+          } else {
+            // Stable visibility
+            opacity = 1;
+          }
+
+          // Add a subtle bounce effect
+          const yOffset = elapsed < 300 ? 10 * (1 - Math.pow(elapsed / 300, 2)) : 0;
+
+          // Draw notification background with rounded corners
+          const textWidth = ctx.measureText(notif.text).width;
+          const padding = 10;
+          const boxWidth = textWidth + padding * 2;
+          const boxHeight = 30;
+          const boxX = CANVAS_WIDTH / 2 - boxWidth / 2;
+          const boxY = 30 + index * 35 - yOffset;
+
+          ctx.globalAlpha = opacity * 0.8;
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+          ctx.beginPath();
+          ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 5);
+          ctx.fill();
+
+          // Draw color indicator strip
+          ctx.fillStyle = notif.color;
+          ctx.beginPath();
+          ctx.roundRect(boxX, boxY, 5, boxHeight, [5, 0, 0, 5]);
+          ctx.fill();
+
+          // Draw text with shadow
+          ctx.globalAlpha = opacity;
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+          ctx.font = 'bold 14px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText(notif.text, CANVAS_WIDTH / 2 + 1, boxY + 20 + 1);
+
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillText(notif.text, CANVAS_WIDTH / 2, boxY + 20);
+          ctx.globalAlpha = 1;
+        });
+
+        return validNotifications;
+      });
+
+      // Check for projectile collisions
+      for (let i = projectiles.length - 1; i >= 0; i--) {
+        const projectile = projectiles[i];
+        const newX = projectile.x + projectile.dx;
+        const newY = projectile.y + projectile.dy;
+
+        if (newX < 0 || newX > CANVAS_WIDTH || newY < 0 || newY > CANVAS_HEIGHT) {
+          projectiles.splice(i, 1);
+          continue;
+        }
+
+        let hitPlayer = false;
+
+        // More accurate collision detection logic
+        players.forEach((player: GamePlayer) => {
+          if (player.health <= 0 || projectile.playerId === player.id || player.invulnerable) return;
+
+          // Calculate squared distance (more efficient than Math.hypot)
+          const dx = newX - player.x;
+          const dy = newY - player.y;
+          const distanceSquared = dx * dx + dy * dy;
+
+          // Compare with squared sum of radii (avoid square root calculation)
+          const combinedRadii = PLAYER_SIZE + PROJECTILE_SIZE;
+
+          if (distanceSquared <= combinedRadii * combinedRadii) {
+            hitPlayer = true;
+            const damage = SHOT_DAMAGE;
+            const newHealth = Math.max(0, player.health - damage);
+
+            // Create hit effects
+            createParticleEffect(newX, newY, 15, '#FF5555');
+            createDamageNumber(player.x, player.y - PLAYER_SIZE - 10, damage);
+
+            // Add hit impulse for more dynamic movement feedback
+            if (player.velocity) {
+              const hitImpulse = 2; // Strength of knockback
+              // Calculate normalized hit direction
+              const hitDirX = dx !== 0 ? dx / Math.sqrt(dx * dx + dy * dy) : 0;
+              const hitDirY = dy !== 0 ? dy / Math.sqrt(dx * dx + dy * dy) : 0;
+
+              // Update player position with knockback (scaled by damage)
+              const knockbackX = hitDirX * hitImpulse * (damage / 100);
+              const knockbackY = hitDirY * hitImpulse * (damage / 100);
+
+              const newX = Math.max(PLAYER_SIZE, Math.min(CANVAS_WIDTH - PLAYER_SIZE, player.x + knockbackX));
+              const newY = Math.max(PLAYER_SIZE, Math.min(CANVAS_HEIGHT - PLAYER_SIZE, player.y + knockbackY));
+
+              updatePlayer(player.id, {
+                x: newX,
+                y: newY
+              });
+            }
+
+            // Update player with hit effect
+            updatePlayer(player.id, {
+              health: newHealth,
+              lastHitTime: performance.now()
+            });
+
+            // Handle hit by current player
+            if (projectile.playerId === currentUserId) {
+              // Add hit sound effect
+              if (gameSettings.sfxEnabled) {
+                const hitSound = new Audio('/hit.mp3'); // This would be a real sound file in production
+                hitSound.volume = gameSettings.volume / 100;
+                hitSound.play().catch(e => console.error('Error playing sound:', e));
+              }
+
+              // Update stats
+              setGameStats(prev => ({
+                ...prev,
+                shotsHit: prev.shotsHit + 1,
+                ...(newHealth === 0 && {
+                  killCount: prev.killCount + 1,
+                  eliminations: [...prev.eliminations, player.id],
+                  killedInRow: prev.killedInRow + 1,
+                  firstKill: prev.killCount === 0 ? true : prev.firstKill,
+                  lastKill: prev.eliminations.length + 1 === players.size - 1 ? true : prev.lastKill,
+                  multiKills: (() => {
+                    const now = performance.now();
+                    const multiKills = [...prev.multiKills];
+                    if (lastTimeRef.current > 0 && now - lastTimeRef.current < 5000) {
+                      const lastMultiKill = multiKills[multiKills.length - 1];
+                      if (lastMultiKill && now - lastMultiKill.timespan < 5000) {
+                        lastMultiKill.count++;
+                        lastMultiKill.timespan = now;
+                      } else {
+                        multiKills.push({ count: 2, timespan: now });
+                      }
+                    }
+                    lastTimeRef.current = now;
+                    return multiKills;
+                  })()
+                })
+              }));
+
+              // Show kill notification with more info
+              if (newHealth === 0) {
+                // More descriptive notification
+                if (player.isAI) {
+                  if (player.aiState?.personality) {
+                    addNotification(`You eliminated ${player.username} (${player.aiState.personality})!`, "#4CAF50", 3000);
+                  } else {
+                    addNotification(`You eliminated ${player.username}!`, "#4CAF50", 3000);
+                  }
+                } else {
+                  addNotification(`You eliminated ${player.username}!`, "#4CAF50", 3000);
+                }
+              }
+            }
+
+            // Handle being hit as current player
+            if (player.id === currentUserId) {
+              // Add damage sound effect
+              if (gameSettings.sfxEnabled) {
+                const damageSound = new Audio('/damage.mp3'); // This would be a real sound file in production
+                damageSound.volume = gameSettings.volume / 100;
+                damageSound.play().catch(e => console.error('Error playing sound:', e));
+              }
+
+              // Update stats
+              setGameStats(prev => ({
+                ...prev,
+                damageReceived: prev.damageReceived + damage,
+                lowestHealth: newHealth < prev.lowestHealth ? newHealth : prev.lowestHealth
+              }));
+
+              // Show damage notification
+              const attacker = players.get(projectile.playerId);
+              if (attacker) {
+                addNotification(`${damage} damage from ${attacker.username}!`, "#F44336", 2000);
+              } else {
+                addNotification(`${damage} damage received!`, "#F44336", 2000);
+              }
+
+              // Screen shake effect for better feedback
+              if (canvas && damage > 0 && gameSettings.graphicsQuality !== 'low') {
+                const intensity = damage / 100 * 10; // Scale shake with damage
+                canvas.style.transform = `translate(${(Math.random() - 0.5) * intensity}px, ${(Math.random() - 0.5) * intensity}px)`;
+                setTimeout(() => {
+                  canvas.style.transform = 'translate(0, 0)';
+                }, 100);
+              }
+            }
+          }
+        });
+
+        if (hitPlayer) {
+          projectiles.splice(i, 1);
+        }
+      }
+
+      // Check game state - win condition
+      const activePlayers = Array.from(players.values()).filter(p => p.health > 0);
+      if (activePlayers.length === 1 && gameState === 'playing') {
+        const winner = activePlayers[0];
+        if (winner.id === currentUserId) {
+          addNotification("Victory! You are the last player standing!", "#4CAF50", 5000);
+        } else {
+          addNotification(`${winner.username} wins the game!`, "#FF9800", 5000);
+        }
+        handleGameEnd(winner.id === currentUserId);
+      } else if (activePlayers.length >= 2 && gameState === 'waiting') {
+        setGameState('playing');
+        addNotification("Game started! Last player standing wins!", "#3498db", 3000);
+      }
+
+      // Draw cooldown indicator (improved visual feedback)
+      if (currentUserId) {
+        const currentPlayer = players.get(currentUserId);
+        if (currentPlayer && currentPlayer.health > 0) {
+          const cooldownBarWidth = 150;
+          const cooldownBarHeight = 12;
+          const cooldownBarX = (CANVAS_WIDTH - cooldownBarWidth) / 2;
+          const cooldownBarY = CANVAS_HEIGHT - 30;
+
+          // Background with rounded corners
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+          ctx.beginPath();
+          ctx.roundRect(cooldownBarX, cooldownBarY, cooldownBarWidth, cooldownBarHeight, 6);
+          ctx.fill();
+
+          if (!canShoot) {
+            // Draw cooldown progress with gradient
+            const timeElapsed = performance.now() - (performance.now() - (SHOT_COOLDOWN - (performance.now() % SHOT_COOLDOWN)));
+            const cooldownProgress = timeElapsed / SHOT_COOLDOWN;
+
+            const gradient = ctx.createLinearGradient(cooldownBarX, 0, cooldownBarX + cooldownBarWidth * cooldownProgress, 0);
+            gradient.addColorStop(0, '#FFC107');
+            gradient.addColorStop(1, '#FF9800');
+
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.roundRect(cooldownBarX, cooldownBarY, cooldownBarWidth * cooldownProgress, cooldownBarHeight, 6);
+            ctx.fill();
+
+            // Draw text with shadow for better readability
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('Reloading...', CANVAS_WIDTH / 2 + 1, cooldownBarY - 5 + 1);
+
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillText('Reloading...', CANVAS_WIDTH / 2, cooldownBarY - 5);
+
+            // Add countdown timer for better feedback
+            const remainingTime = ((SHOT_COOLDOWN - timeElapsed) / 1000).toFixed(1);
+            ctx.font = '14px Arial';
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillText(remainingTime + 's', CANVAS_WIDTH / 2, cooldownBarY + 8);
+          } else {
+            // Draw available shots with improved visuals
+            const shotWidth = cooldownBarWidth / MAX_SHOTS;
+
+            // Draw individual shot indicators
+            for (let i = 0; i < MAX_SHOTS - shotCount; i++) {
+              const shotX = cooldownBarX + i * shotWidth;
+
+              // Use gradient for better appearance
+              const gradient = ctx.createLinearGradient(shotX, cooldownBarY, shotX, cooldownBarY + cooldownBarHeight);
+              gradient.addColorStop(0, '#81C784'); // Light green
+              gradient.addColorStop(1, '#388E3C'); // Dark green
+
+              ctx.fillStyle = gradient;
+              ctx.beginPath();
+
+              // First shot (leftmost)
+              if (i === 0) {
+                ctx.roundRect(shotX, cooldownBarY, shotWidth - 1, cooldownBarHeight, [6, 0, 0, 6]);
+              }
+              // Last shot (rightmost)
+              else if (i === MAX_SHOTS - shotCount - 1) {
+                ctx.roundRect(shotX, cooldownBarY, shotWidth - 1, cooldownBarHeight, [0, 6, 6, 0]);
+              }
+              // Middle shots
+              else {
+                ctx.rect(shotX, cooldownBarY, shotWidth - 1, cooldownBarHeight);
+              }
+
+              ctx.fill();
+            }
+
+            // Draw text with shadow for better readability
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${MAX_SHOTS - shotCount} Shots Available`, CANVAS_WIDTH / 2 + 1, cooldownBarY - 5 + 1);
+
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillText(`${MAX_SHOTS - shotCount} Shots Available`, CANVAS_WIDTH / 2, cooldownBarY - 5);
+          }
+        }
+      }
+
+      // Draw FPS counter if enabled
+      if (gameSettings.showFps) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(5, 5, 60, 20);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = '12px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(`FPS: ${fps}`, 10, 18);
+      }
+
+      if (gameState !== 'finished') {
+        requestAnimationFrameRef.current = requestAnimationFrame(draw);
+      }
+    };
+
+    // Store the game loop function in ref
+    gameLoopRef.current = draw;
+
+    // Start the game loop
+    requestAnimationFrameRef.current = requestAnimationFrame(draw);
+
+    return () => {
+      if (requestAnimationFrameRef.current) cancelAnimationFrame(requestAnimationFrameRef.current);
+    };
+  }, [
+    players, currentUserId, gameState, updatePlayer, playerAvatars, isSingleplayer,
+    gameSettings, showTutorial, addNotification, createDamageNumber, createParticleEffect,
+    handleGameEnd, loadPlayerAvatar, projectiles, updateAIBehavior
+  ]);
+
+
+  // Helper function to fire projectile
+  const fireProjectile = useCallback((targetX: number, targetY: number) => {
     if (!canShoot || shotCount >= MAX_SHOTS || !currentUserId || showTutorial) return;
 
     const currentPlayer = players.get(currentUserId);
     if (!currentPlayer || currentPlayer.health <= 0) return;
 
     const angle = Math.atan2(targetY - currentPlayer.y, targetX - currentPlayer.x);
-    const velocity = 5;
+    const velocity = PROJECTILE_SPEED;
     const dx = Math.cos(angle) * velocity;
     const dy = Math.sin(angle) * velocity;
 
@@ -1299,11 +1831,32 @@ export function Game() {
       }
     ]);
 
-    // Play shoot sound
+    // Visual feedback: muzzle flash at player position in firing direction
+    createParticleEffect(
+      currentPlayer.x + Math.cos(angle) * PLAYER_SIZE,
+      currentPlayer.y + Math.sin(angle) * PLAYER_SIZE,
+      15,
+      '#8AFF8A'
+    );
+
+    // Play shoot sound with better sound feedback
     if (gameSettings.sfxEnabled) {
-      const shootSound = new Audio('/shoot.mp3'); // This would be a real sound file in production
+      const shootSound = new Audio('/shoot.mp3');
       shootSound.volume = gameSettings.volume / 100;
+
+      // Slightly randomize pitch for more dynamic feel
+      shootSound.playbackRate = 0.9 + Math.random() * 0.2;
+
       shootSound.play().catch(e => console.error('Error playing sound:', e));
+    }
+
+    // Add screen shake for more impact (subtle)
+    if (canvasRef.current && gameSettings.graphicsQuality !== 'low') {
+      const intensity = 2;
+      canvasRef.current.style.transform = `translate(${(Math.random() - 0.5) * intensity}px, ${(Math.random() - 0.5) * intensity}px)`;
+      setTimeout(() => {
+        if (canvasRef.current) canvasRef.current.style.transform = 'translate(0, 0)';
+      }, 50);
     }
 
     // Update stats
@@ -1318,19 +1871,27 @@ export function Game() {
           setCanShoot(true);
           setShotCount(0);
 
-          // Play reload sound
+          // Play reload sound with better feedback
           if (gameSettings.sfxEnabled) {
-            const reloadSound = new Audio('/reload.mp3'); // This would be a real sound file in production
+            const reloadSound = new Audio('/reload.mp3');
             reloadSound.volume = gameSettings.volume / 100;
             reloadSound.play().catch(e => console.error('Error playing sound:', e));
+
+            // Add notification for better feedback
+            addNotification("Weapons reloaded!", "#64B5F6", 1500);
           }
         }, SHOT_COOLDOWN);
       }
       return newCount;
     });
-  };
+  }, [
+    canShoot, shotCount, currentUserId, showTutorial, players,
+    createParticleEffect, gameSettings.sfxEnabled, gameSettings.volume,
+    gameSettings.graphicsQuality, addNotification
+  ]);
 
-  const handleShoot = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  // Handle shooting via mouse click
+  const handleShoot = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canShoot || shotCount >= MAX_SHOTS || !currentUserId || showTutorial) return;
 
     const canvas = canvasRef.current;
@@ -1341,24 +1902,30 @@ export function Game() {
     const y = e.clientY - rect.top;
 
     fireProjectile(x, y);
-  };
+  }, [canShoot, shotCount, currentUserId, showTutorial, fireProjectile]);
 
-  const handleMobileMove = (dx: number, dy: number) => {
+  // Handle mobile controls
+  const handleMobileMove = useCallback((dx: number, dy: number) => {
     if (!currentUserId || showTutorial) return;
 
     const currentPlayer = players.get(currentUserId);
     if (!currentPlayer || currentPlayer.health <= 0) return;
 
-    const moveSpeed = 5;
+    const moveSpeed = PLAYER_MOVEMENT_SPEED;
     const newX = Math.max(PLAYER_SIZE, Math.min(CANVAS_WIDTH - PLAYER_SIZE, currentPlayer.x + dx * moveSpeed));
     const newY = Math.max(PLAYER_SIZE, Math.min(CANVAS_HEIGHT - PLAYER_SIZE, currentPlayer.y + dy * moveSpeed));
 
     if (newX !== currentPlayer.x || newY !== currentPlayer.y) {
-      updatePlayer(currentUserId, { x: newX, y: newY });
+      updatePlayer(currentUserId, {
+        x: newX,
+        y: newY,
+        velocity: { x: dx * moveSpeed, y: dy * moveSpeed }
+      });
     }
-  };
+  }, [currentUserId, showTutorial, players, updatePlayer]);
 
-  const handleMobileShoot = (x: number, y: number) => {
+  // Handle mobile shooting
+  const handleMobileShoot = useCallback((x: number, y: number) => {
     if (showTutorial) return;
 
     const canvas = canvasRef.current;
@@ -1369,13 +1936,15 @@ export function Game() {
     const canvasY = y - rect.top;
 
     fireProjectile(canvasX, canvasY);
-  };
+  }, [showTutorial, fireProjectile]);
 
-  const handleReturnToLobby = () => {
+  // Handle returning to lobby
+  const handleReturnToLobby = useCallback(() => {
     navigate('/game/lobby');
-  };
+  }, [navigate]);
 
-  const handleRestart = () => {
+  // Handle game restart
+  const handleRestart = useCallback(() => {
     if (isSingleplayer) {
       const currentPlayer = players.get(currentUserId || '');
       if (currentPlayer) {
@@ -1415,9 +1984,13 @@ export function Game() {
     } else {
       navigate('/game/lobby');
     }
-  };
+  }, [
+    isSingleplayer, players, currentUserId, updatePlayer, removePlayer,
+    initializeAIOpponents, navigate, addNotification
+  ]);
 
-  const handleCloseTutorial = () => {
+  // Handle closing the tutorial
+  const handleCloseTutorial = useCallback(() => {
     setShowTutorial(false);
     setTutorialStep(0);
 
@@ -1429,8 +2002,14 @@ export function Game() {
 
     setGameSettings(updatedSettings);
     localStorage.setItem('gameSettings', JSON.stringify(updatedSettings));
-  };
+  }, [gameSettings]);
 
+  // Handle share game button
+  const handleShareGame = useCallback(() => {
+    setShowShareDialog(true);
+  }, []);
+
+  // Show loading screen
   if (gameState === 'loading') {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -1442,10 +2021,6 @@ export function Game() {
     );
   }
 
-  const handleShareGame = () => {
-    setShowShareDialog(true);
-  };
-  
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 p-4" tabIndex={0}>
       <div className="relative">

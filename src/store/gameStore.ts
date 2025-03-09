@@ -8,6 +8,7 @@ interface AIState {
   lastShotTime: number;
   movementDirection: { x: number, y: number };
   changeDirCounter: number;
+  personality?: 'aggressive' | 'defensive' | 'sniper' | 'erratic';
 }
 
 interface Player {
@@ -20,6 +21,8 @@ interface Player {
   avatar_url?: string;
   isAI?: boolean;
   aiState?: AIState;
+  lastMoveTime?: number;
+  velocity?: { x: number; y: number };
 }
 
 interface GameState {
