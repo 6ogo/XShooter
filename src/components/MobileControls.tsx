@@ -1,3 +1,6 @@
+// Enhance the MobileControls.tsx component for better mobile support
+// Update the MobileControls component with these improvements:
+
 import { useEffect, useRef, useState } from 'react';
 import { Target, ChevronUp, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 
@@ -21,14 +24,21 @@ export function MobileControls({ onMove, onShoot }: MobileControlsProps) {
   const [showDpadControls, setShowDpadControls] = useState(false);
   const [lastShootTime, setLastShootTime] = useState(0);
   const [shootButtonActive, setShootButtonActive] = useState(false);
+  const [lastTouchId, setLastTouchId] = useState<number | null>(null);
   const maxDistance = 40; // Maximum joystick movement radius
   const shootCooldown = 100; // Minimum time between shots in ms to prevent spamming
 
   const toggleControlType = () => {
     setShowDpadControls(!showDpadControls);
+    // Save preference
+    localStorage.setItem('preferDpad', (!showDpadControls).toString());
   };
 
   useEffect(() => {
+    // Load control preference
+    const preferDpad = localStorage.getItem('preferDpad') === 'true';
+    setShowDpadControls(preferDpad);
+
     if (joystickRef.current && joystickContainerRef.current) {
       const updateJoystickCenter = () => {
         const rect = joystickRef.current?.getBoundingClientRect();
@@ -40,12 +50,19 @@ export function MobileControls({ onMove, onShoot }: MobileControlsProps) {
         }
       };
 
-      // Update center position initially and on resize
+      // Update center position initially and on resize/orientation change
       updateJoystickCenter();
+      
+      const resizeObserver = new ResizeObserver(updateJoystickCenter);
+      resizeObserver.observe(joystickContainerRef.current);
+      
       window.addEventListener('resize', updateJoystickCenter);
       window.addEventListener('orientationchange', updateJoystickCenter);
       
       return () => {
+        if (joystickContainerRef.current) {
+          resizeObserver.unobserve(joystickContainerRef.current);
+        }
         window.removeEventListener('resize', updateJoystickCenter);
         window.removeEventListener('orientationchange', updateJoystickCenter);
       };
@@ -54,14 +71,26 @@ export function MobileControls({ onMove, onShoot }: MobileControlsProps) {
 
   const handleJoystickStart = (e: React.TouchEvent) => {
     e.preventDefault();
+    const touch = e.touches[0];
+    setLastTouchId(touch.identifier);
     setJoystickActive(true);
     handleJoystickMove(e);
   };
 
   const handleJoystickMove = (e: React.TouchEvent) => {
     if (!joystickActive) return;
+    
+    // Find the touch that started the joystick
+    let touch: React.Touch | undefined;
+    for (let i = 0; i < e.touches.length; i++) {
+      if (e.touches[i].identifier === lastTouchId) {
+        touch = e.touches[i];
+        break;
+      }
+    }
+    
+    if (!touch) return;
 
-    const touch = e.touches[0];
     let dx = touch.clientX - joystickCenter.x;
     let dy = touch.clientY - joystickCenter.y;
 
@@ -84,10 +113,22 @@ export function MobileControls({ onMove, onShoot }: MobileControlsProps) {
     onMove(moveX * 5, moveY * 5); // Multiply by desired speed
   };
 
-  const handleJoystickEnd = () => {
-    setJoystickActive(false);
-    setJoystickPosition({ x: 0, y: 0 });
-    onMove(0, 0); // Stop movement
+  const handleJoystickEnd = (e: React.TouchEvent) => {
+    // Only end if this is the touch that started the joystick
+    let touchFound = false;
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === lastTouchId) {
+        touchFound = true;
+        break;
+      }
+    }
+    
+    if (touchFound) {
+      setJoystickActive(false);
+      setJoystickPosition({ x: 0, y: 0 });
+      setLastTouchId(null);
+      onMove(0, 0); // Stop movement
+    }
   };
 
   const handleShootStart = (e: React.TouchEvent) => {
@@ -140,10 +181,10 @@ export function MobileControls({ onMove, onShoot }: MobileControlsProps) {
   };
 
   return (
-    <div className="fixed bottom-0 left-0 w-full h-40 pointer-events-none">
+    <div className="fixed bottom-0 left-0 w-full h-40 pointer-events-none z-30">
       {/* Toggle Controls Button */}
       <button
-        className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-full bg-gray-800 bg-opacity-60 text-white text-xs p-2 rounded-t-lg pointer-events-auto"
+        className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-full bg-gray-800 bg-opacity-60 text-white text-xs px-3 py-2 rounded-t-lg pointer-events-auto"
         onClick={toggleControlType}
       >
         {showDpadControls ? 'Switch to Joystick' : 'Switch to D-Pad'}
@@ -157,6 +198,7 @@ export function MobileControls({ onMove, onShoot }: MobileControlsProps) {
             className="col-start-2 row-start-1 bg-white bg-opacity-20 rounded-lg flex items-center justify-center active:bg-opacity-40"
             onTouchStart={() => handleDpadButton('up')}
             onTouchEnd={handleDpadButtonRelease}
+            onTouchCancel={handleDpadButtonRelease}
             aria-label="Move Up"
           >
             <ChevronUp className="text-white" size={24} />
@@ -167,6 +209,7 @@ export function MobileControls({ onMove, onShoot }: MobileControlsProps) {
             className="col-start-1 row-start-2 bg-white bg-opacity-20 rounded-lg flex items-center justify-center active:bg-opacity-40"
             onTouchStart={() => handleDpadButton('left')}
             onTouchEnd={handleDpadButtonRelease}
+            onTouchCancel={handleDpadButtonRelease}
             aria-label="Move Left"
           >
             <ChevronLeft className="text-white" size={24} />
@@ -176,6 +219,7 @@ export function MobileControls({ onMove, onShoot }: MobileControlsProps) {
             className="col-start-3 row-start-2 bg-white bg-opacity-20 rounded-lg flex items-center justify-center active:bg-opacity-40"
             onTouchStart={() => handleDpadButton('right')}
             onTouchEnd={handleDpadButtonRelease}
+            onTouchCancel={handleDpadButtonRelease}
             aria-label="Move Right"
           >
             <ChevronRight className="text-white" size={24} />
@@ -186,6 +230,7 @@ export function MobileControls({ onMove, onShoot }: MobileControlsProps) {
             className="col-start-2 row-start-3 bg-white bg-opacity-20 rounded-lg flex items-center justify-center active:bg-opacity-40"
             onTouchStart={() => handleDpadButton('down')}
             onTouchEnd={handleDpadButtonRelease}
+            onTouchCancel={handleDpadButtonRelease}
             aria-label="Move Down"
           >
             <ChevronDown className="text-white" size={24} />

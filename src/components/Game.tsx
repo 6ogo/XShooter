@@ -140,6 +140,7 @@ export function Game() {
   const [showTutorial, setShowTutorial] = useState(false);
   const [tutorialStep, setTutorialStep] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
+  const [neverShowTutorial, setNeverShowTutorial] = useState(false);
   const [gameSettings, setGameSettings] = useState<GameSettings>({
     volume: 70,
     graphicsQuality: 'medium',
@@ -224,8 +225,12 @@ export function Game() {
             ...parsedSettings
           }));
 
-          // Show tutorial on first game if setting is enabled
-          if (parsedSettings.showTutorialOnStart) {
+          // Check if we should show tutorial
+          const shouldNeverShow = localStorage.getItem('neverShowTutorial') === 'true';
+          setNeverShowTutorial(shouldNeverShow);
+
+          // Only show tutorial if setting is enabled and user hasn't opted out
+          if (parsedSettings.showTutorialOnStart && !shouldNeverShow) {
             setShowTutorial(true);
           }
         } catch (err) {
@@ -233,7 +238,12 @@ export function Game() {
         }
       } else if (gameSettings.showTutorialOnStart) {
         // If no saved settings but default is to show tutorial
-        setShowTutorial(true);
+        // and user hasn't opted out
+        const shouldNeverShow = localStorage.getItem('neverShowTutorial') === 'true';
+        setNeverShowTutorial(shouldNeverShow);
+        if (!shouldNeverShow) {
+          setShowTutorial(true);
+        }
       }
     };
 
@@ -245,6 +255,7 @@ export function Game() {
       console.log(`Game session lasted ${Math.round(sessionTime / 1000)} seconds`);
     };
   }, [gameSettings.showTutorialOnStart]);
+
 
   // Add this useEffect to fetch all player stats when the game starts
   useEffect(() => {
@@ -1329,6 +1340,57 @@ export function Game() {
       }
     ]);
   }, []);
+  useEffect(() => {
+    const handleResize = () => {
+      if (canvasRef.current) {
+        const isMobileDevice = window.innerWidth < 768 || window.innerHeight < 600;
+
+        if (isMobileDevice) {
+          // For mobile devices, ensure controls are appropriately sized
+          const isLandscape = window.innerWidth > window.innerHeight;
+
+          // Adjust canvas or container scaling based on orientation
+          if (isLandscape) {
+            // Landscape: Ensure the game fits the height
+            const scale = Math.min(1, (window.innerHeight - 80) / CANVAS_HEIGHT);
+            canvasRef.current.style.transform = `scale(${scale})`;
+          } else {
+            // Portrait: Ensure the game fits the width
+            const scale = Math.min(1, (window.innerWidth - 40) / CANVAS_WIDTH);
+            canvasRef.current.style.transform = `scale(${scale})`;
+          }
+        } else {
+          // Reset for desktop
+          canvasRef.current.style.transform = 'scale(1)';
+        }
+      }
+    };
+
+    // Initial call and event listener
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleResize);
+    };
+  }, []);
+
+  // Prevent page scrolling when touching the game area
+  useEffect(() => {
+    const preventDefault = (e: TouchEvent) => {
+      e.preventDefault();
+    };
+
+    const canvas = canvasRef.current;
+    if (canvas) {
+      canvas.addEventListener('touchmove', preventDefault, { passive: false });
+      return () => {
+        canvas.removeEventListener('touchmove', preventDefault);
+      };
+    }
+  }, []);
 
   // Game render loop useEffect
   useEffect(() => {
@@ -2376,20 +2438,26 @@ export function Game() {
     initializeAIOpponents, navigate, addNotification
   ]);
 
-  // Handle closing the tutorial
+  // handleCloseTutorial function to save the preference
   const handleCloseTutorial = useCallback(() => {
     setShowTutorial(false);
     setTutorialStep(0);
 
+    // Save the "never show again" preference if checked
+    if (neverShowTutorial) {
+      localStorage.setItem('neverShowTutorial', 'true');
+    }
+
     // Update settings to not show tutorial again
     const updatedSettings = {
       ...gameSettings,
-      showTutorialOnStart: false
+      showTutorialOnStart: !neverShowTutorial
     };
 
     setGameSettings(updatedSettings);
     localStorage.setItem('gameSettings', JSON.stringify(updatedSettings));
-  }, [gameSettings]);
+  }, [gameSettings, neverShowTutorial]);
+
 
   // Handle share game button
   const handleShareGame = useCallback(() => {
@@ -2447,7 +2515,7 @@ export function Game() {
         </div>
       </div>
 
-      <div className="relative">
+      <div className="relative game-canvas-container">
         <canvas
           ref={canvasRef}
           width={CANVAS_WIDTH}
@@ -2556,51 +2624,73 @@ export function Game() {
 
         {/* Tutorial Overlay */}
         {showTutorial && (
-          <div className="absolute inset-0 bg-black bg-opacity-80 flex items-center justify-center rounded-lg">
-            <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full shadow-2xl border border-indigo-500">
+          <div className="absolute inset-0 bg-black bg-opacity-80 flex items-center justify-center rounded-lg p-4 overflow-auto">
+            <div className="bg-gray-800 rounded-lg p-4 md:p-6 max-w-md w-full shadow-2xl border border-indigo-500 max-h-[90vh] overflow-y-auto">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-xl font-bold text-white">{tutorialSteps[tutorialStep].title}</h3>
                 <button
                   onClick={handleCloseTutorial}
-                  className="text-gray-400 hover:text-white transition-colors"
+                  className="text-gray-400 hover:text-white transition-colors p-2" // Increased touch target
+                  aria-label="Close tutorial"
                 >
-                  <X size={20} />
+                  <X size={24} /> {/* Larger icon for mobile */}
                 </button>
               </div>
 
-              <p className="text-gray-300 mb-6">{tutorialSteps[tutorialStep].content}</p>
+              <div className="text-gray-300 mb-6">{tutorialSteps[tutorialStep].content}</div>
 
-              <div className="flex justify-between">
+              <div className="flex flex-col sm:flex-row justify-between gap-2">
                 <button
                   onClick={() => setTutorialStep(Math.max(0, tutorialStep - 1))}
                   className={`px-4 py-2 rounded-lg ${tutorialStep === 0
                     ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
                     : 'bg-gray-700 text-white hover:bg-gray-600'
-                    } transition-colors`}
+                    } transition-colors w-full sm:w-auto`}
                   disabled={tutorialStep === 0}
                 >
                   Previous
                 </button>
 
+                <div className="flex items-center justify-center my-2 sm:my-0">
+                  <span className="text-gray-400 text-sm">
+                    {tutorialStep + 1} / {tutorialSteps.length}
+                  </span>
+                </div>
+
                 {tutorialStep < tutorialSteps.length - 1 ? (
                   <button
                     onClick={() => setTutorialStep(tutorialStep + 1)}
-                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-1"
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center justify-center gap-1 w-full sm:w-auto"
                   >
                     Next <ChevronRight size={16} />
                   </button>
                 ) : (
                   <button
                     onClick={handleCloseTutorial}
-                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-1"
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-1 w-full sm:w-auto"
                   >
                     <Check size={16} /> Start Playing
                   </button>
                 )}
               </div>
+
+              {/* Never show again checkbox */}
+              <div className="mt-4 pt-4 border-t border-gray-700 flex items-center">
+                <input
+                  type="checkbox"
+                  id="neverShowTutorial"
+                  checked={neverShowTutorial}
+                  onChange={(e) => setNeverShowTutorial(e.target.checked)}
+                  className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-600 rounded"
+                />
+                <label htmlFor="neverShowTutorial" className="ml-2 text-sm text-gray-300">
+                  Don't show tutorial on startup
+                </label>
+              </div>
             </div>
           </div>
         )}
+
         {/* Game Settings Modal */}
         {showSettings && (
           <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
