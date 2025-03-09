@@ -8,6 +8,7 @@ import { Achievements } from './components/Achievements';
 import { Settings } from './components/Settings';
 import { PrivacyPolicy } from './components/PrivacyPolicy.tsx';
 import { TermsOfService } from './components/TermsOfService.tsx';
+import Help from './components/Help.tsx';
 
 function App() {
   return (
@@ -23,6 +24,7 @@ function App() {
           <Route path="/settings" element={<Settings />} />
           <Route path="/privacy" element={<PrivacyPolicy />} />
           <Route path="/terms" element={<TermsOfService />} />
+          <Route path="/Help" element={<Help />} />
         </Routes>
       </div>
     </Router>
