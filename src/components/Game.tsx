@@ -123,6 +123,79 @@ export function Game() {
       content: "You're all set! Good luck and have fun in XShooter!"
     }
   ];
+// Initialize AI opponents with different personalities for more dynamic gameplay
+const initializeAIOpponents = useCallback((count: number) => {
+  console.log("Initializing AI opponents:", count);
+
+  // Remove any existing AI opponents first
+  const playersToRemove = [];
+  for (const [playerId, player] of players.entries()) {
+    if (player.isAI) playersToRemove.push(playerId);
+  }
+
+  // Remove in a separate loop to avoid modifying collection during iteration
+  playersToRemove.forEach(id => removePlayer(id));
+
+  // AI personality types for variety
+  const personalities = ['aggressive', 'defensive', 'sniper', 'erratic'];
+
+  // Add new AI opponents
+  for (let i = 0; i < count; i++) {
+    const aiId = 'ai_' + Math.random().toString(36).substring(2, 9);
+
+    // Distribute AI opponents evenly around the canvas
+    const angle = (Math.PI * 2 * i) / count;
+    const distance = CANVAS_WIDTH * 0.3; // Position at 30% of canvas width from center
+
+    const x = Math.max(PLAYER_SIZE, Math.min(CANVAS_WIDTH - PLAYER_SIZE,
+      CANVAS_WIDTH / 2 + Math.cos(angle) * distance));
+    const y = Math.max(PLAYER_SIZE, Math.min(CANVAS_HEIGHT - PLAYER_SIZE,
+      CANVAS_HEIGHT / 2 + Math.sin(angle) * distance));
+
+    // Initial movement direction is toward the center
+    const dirX = (CANVAS_WIDTH / 2) - x;
+    const dirY = (CANVAS_HEIGHT / 2) - y;
+    const dirLength = Math.sqrt(dirX * dirX + dirY * dirY);
+
+    const movementDirection = {
+      x: dirLength > 0 ? dirX / dirLength : 0,
+      y: dirLength > 0 ? dirY / dirLength : 0,
+    };
+
+    // Assign personality
+    const personality = personalities[i % personalities.length];
+
+    // Create with unique names based on personality
+    const botNames = {
+      'aggressive': ["PredatorBot", "HunterBot", "RusherBot"],
+      'defensive': ["GuardianBot", "ShieldBot", "DefenderBot"],
+      'sniper': ["SniperBot", "SharpshooterBot", "MarksmanBot"],
+      'erratic': ["ZigZagBot", "ChaosBot", "TricksterBot"]
+    };
+
+    const nameList = botNames[personality];
+    const botName = nameList[Math.floor(Math.random() * nameList.length)];
+
+    updatePlayer(aiId, {
+      id: aiId,
+      x,
+      y,
+      health: 100,
+      username: botName,
+      isAI: true,
+      aiState: {
+        targetX: x,
+        targetY: y,
+        lastShotTime: 0,
+        movementDirection,
+        changeDirCounter: 0,
+        personality
+      },
+    });
+
+    console.log(`Added AI opponent: ${botName} (${personality}) at (${x.toFixed(0)}, ${y.toFixed(0)})`);
+  }
+}, [players, removePlayer, updatePlayer]);
 
   // Initialize game settings from localStorage
   useEffect(() => {
@@ -177,34 +250,37 @@ export function Game() {
   useEffect(() => {
     const initGame = async () => {
       try {
-        if (id === 'singleplayer') {
-          console.log("Initializing singleplayer mode");
+// For singleplayer mode
+if (id === 'singleplayer') {
+  console.log("Initializing singleplayer mode");
 
-          // Generate a player ID for this session
-          const playerId = 'player_' + Math.random().toString(36).substring(2, 9);
-          setCurrentUserId(playerId);
+  // Generate a player ID for this session
+  const playerId = 'player_' + Math.random().toString(36).substring(2, 9);
+  setCurrentUserId(playerId);
 
-          // Position player in the center of the canvas
-          const x = CANVAS_WIDTH / 2;
-          const y = CANVAS_HEIGHT / 2;
+  // Position player in the center of the canvas
+  const x = CANVAS_WIDTH / 2;
+  const y = CANVAS_HEIGHT / 2;
 
-          // Add the player
-          updatePlayer(playerId, {
-            id: playerId,
-            x,
-            y,
-            health: 100,
-            username: 'You'
-          });
+  // Add the player
+  updatePlayer(playerId, {
+    id: playerId,
+    x,
+    y,
+    health: 100,
+    username: 'You'
+  });
 
-          // Set game state to playing after a short delay
-          setTimeout(() => {
-            console.log("Starting singleplayer game");
-            setGameState('playing');
-          }, 300);
+  // Set game state to playing and initialize AI opponents
+  setTimeout(() => {
+    console.log("Starting singleplayer game");
+    initializeAIOpponents(AI_BOT_COUNT); // Add this line
+    setGameState('playing');
+  }, 300);
 
-          return;
-        }
+  return;
+}
+
 
         // For multiplayer games
         if (currentUserId && id !== 'singleplayer' && players.size > 0) {
@@ -317,57 +393,90 @@ export function Game() {
   }, [gameSettings.controlType, showTutorial]);
 
   // Basic canvas rendering
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+useEffect(() => {
+  const canvas = canvasRef.current;
+  if (!canvas) return;
+  
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
 
-    // Basic game loop that will be expanded in the full component
-    const draw = () => {
-      // Clear canvas
-      ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      
-      // Draw background
-      ctx.fillStyle = '#1a1a2e';
-      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      
-      // Draw players (simplified)
-      players.forEach(player => {
-        if (player.health <= 0) return;
-        
-        // Draw player
-        ctx.fillStyle = player.id === currentUserId ? '#4CAF50' : '#2196F3';
-        ctx.beginPath();
-        ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
-        ctx.fill();
-        
-        // Draw health bar
-        const healthBarWidth = 40;
-        const healthBarHeight = 4;
-        const healthBarX = player.x - healthBarWidth / 2;
-        const healthBarY = player.y - PLAYER_SIZE - 15;
-        
-        // Background
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-        ctx.fillRect(healthBarX, healthBarY, healthBarWidth, healthBarHeight);
-        
-        // Health fill
-        ctx.fillStyle = '#4CAF50';
-        ctx.fillRect(healthBarX, healthBarY, healthBarWidth * (player.health / 100), healthBarHeight);
-      });
-      
-      // Continue animation
-      requestAnimationFrame(draw);
-    };
+  console.log("Setting up canvas rendering with players:", Array.from(players.entries()).length);
+
+  // Basic game loop that will be expanded in the full component
+  const draw = () => {
+    // Clear canvas
+    ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     
-    // Start game loop
-    const animationId = requestAnimationFrame(draw);
+    // Draw background
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     
-    // Cleanup
-    return () => cancelAnimationFrame(animationId);
-  }, [players, currentUserId]);
+    // Grid lines for better visual reference
+    ctx.strokeStyle = '#2a2a4e';
+    ctx.lineWidth = 1;
+    
+    // Draw grid lines
+    for (let x = 0; x <= CANVAS_WIDTH; x += 40) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, CANVAS_HEIGHT);
+      ctx.stroke();
+    }
+    
+    for (let y = 0; y <= CANVAS_HEIGHT; y += 40) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(CANVAS_WIDTH, y);
+      ctx.stroke();
+    }
+    
+    // Draw players (simplified)
+    let drawnPlayerCount = 0;
+    players.forEach(player => {
+      if (player.health <= 0) return;
+      
+      // Draw player
+      ctx.fillStyle = player.id === currentUserId ? '#4CAF50' : (player.isAI ? '#F44336' : '#2196F3');
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Draw health bar
+      const healthBarWidth = 40;
+      const healthBarHeight = 4;
+      const healthBarX = player.x - healthBarWidth / 2;
+      const healthBarY = player.y - PLAYER_SIZE - 15;
+      
+      // Background
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+      ctx.fillRect(healthBarX, healthBarY, healthBarWidth, healthBarHeight);
+      
+      // Health fill
+      ctx.fillStyle = '#4CAF50';
+      ctx.fillRect(healthBarX, healthBarY, healthBarWidth * (player.health / 100), healthBarHeight);
+      
+      // Username
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = '12px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText(player.username, player.x, player.y - PLAYER_SIZE - 5);
+      
+      drawnPlayerCount++;
+    });
+    
+    console.log(`Drew ${drawnPlayerCount} players on canvas`);
+    
+    // Continue animation
+    requestAnimationFrame(draw);
+  };
+  
+  // Start game loop
+  console.log("Starting game rendering loop");
+  const animationId = requestAnimationFrame(draw);
+  
+  // Cleanup
+  return () => cancelAnimationFrame(animationId);
+}, [players, currentUserId]);
 
   // Resize handling
   useEffect(() => {
