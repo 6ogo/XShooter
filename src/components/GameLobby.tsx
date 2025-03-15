@@ -421,33 +421,42 @@ export function GameLobby() {
   };
 
   // Function to clean up empty games or old inactive games
-  const cleanupEmptyGames = async () => {
-    try {
-      console.log('Running cleanup for empty/inactive games');
+const cleanupEmptyGames = async () => {
+  try {
+    console.log('Running cleanup for empty/inactive games');
 
-      // Step 1: Get all waiting games
-      const { data: waitingGames, error: gamesError } = await supabase
-        .from('games')
-        .select('id, current_players, created_at, host_id')
-        .eq('status', 'waiting');
+    // Step 1: Get all waiting games
+    const { data: waitingGames, error: gamesError } = await supabase
+      .from('games')
+      .select('id, current_players, created_at, host_id, status')
+      .in('status', ['waiting', 'finished']);
 
-      if (gamesError) {
-        console.error('Error fetching games for cleanup:', gamesError);
-        return;
-      }
+    if (gamesError) {
+      console.error('Error fetching games for cleanup:', gamesError);
+      return;
+    }
 
-      if (!waitingGames || waitingGames.length === 0) return;
+    if (!waitingGames || waitingGames.length === 0) return;
 
-      // Step 2: Get actual player counts by checking game_players table
-      const gamesToCleanup = [];
+    // Step 2: Identify games to clean up
+    const gamesToCleanup = [];
+    const finishedGamesToKeep = [];
 
-      for (const game of waitingGames) {
-        // Check last activity time
-        const now = new Date();
-        const gameDate = new Date(game.created_at);
-        const hoursSinceCreation = (now.getTime() - gameDate.getTime()) / (1000 * 60 * 60);
+    for (const game of waitingGames) {
+      // Check last activity time
+      const now = new Date();
+      const gameDate = new Date(game.created_at);
+      const hoursSinceCreation = (now.getTime() - gameDate.getTime()) / (1000 * 60 * 60);
 
-        // Games older than 2 hours should be cleaned up
+      // Handle differently based on game status
+      if (game.status === 'finished') {
+        // For finished games, check if they're older than 6 hours
+        if (hoursSinceCreation > 6) {
+          // Make sure we update stats before deleting
+          finishedGamesToKeep.push(game.id);
+        }
+      } else {
+        // Games older than 2 hours or empty games should be cleaned up
         if (hoursSinceCreation > 2) {
           gamesToCleanup.push(game.id);
           continue;
@@ -476,28 +485,46 @@ export function GameLobby() {
             .eq('id', game.id);
         }
       }
-
-      // Step 3: Delete the players from games to be cleaned up
-      if (gamesToCleanup.length > 0) {
-        console.log(`Cleaning up ${gamesToCleanup.length} empty or inactive games`);
-
-        await supabase
-          .from('game_players')
-          .delete()
-          .in('game_id', gamesToCleanup);
-
-        // Step 4: Delete the games
-        await supabase
-          .from('games')
-          .delete()
-          .in('id', gamesToCleanup);
-
-        console.log(`Cleanup complete, removed ${gamesToCleanup.length} games`);
-      }
-    } catch (err) {
-      console.error('Error cleaning up games:', err);
     }
-  };
+
+    // Step 3: Process finished games that need stats updated
+    if (finishedGamesToKeep.length > 0) {
+      console.log(`Updating stats for ${finishedGamesToKeep.length} finished games`);
+      
+      // Call the RPC function to update stats for these games
+      const { error: rpcError } = await supabase.rpc('update_stats_for_games', { 
+        game_ids: finishedGamesToKeep 
+      });
+      
+      if (rpcError) {
+        console.error('Error updating stats for finished games:', rpcError);
+      } else {
+        // After successful stats update, add these games to cleanup list
+        gamesToCleanup.push(...finishedGamesToKeep);
+      }
+    }
+
+    // Step 4: Delete the players from games to be cleaned up
+    if (gamesToCleanup.length > 0) {
+      console.log(`Cleaning up ${gamesToCleanup.length} empty or inactive games`);
+
+      await supabase
+        .from('game_players')
+        .delete()
+        .in('game_id', gamesToCleanup);
+
+      // Step 5: Delete the games
+      await supabase
+        .from('games')
+        .delete()
+        .in('id', gamesToCleanup);
+
+      console.log(`Cleanup complete, removed ${gamesToCleanup.length} games`);
+    }
+  } catch (err) {
+    console.error('Error cleaning up games:', err);
+  }
+};
 
 
   const startSingleplayer = () => {
