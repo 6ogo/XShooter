@@ -4,65 +4,16 @@ import { useGameStore } from '../store/gameStore';
 import { supabase } from '../lib/supabase';
 import { AchievementNotification } from './AchievementNotification';
 import { Avatar } from './Avatar';
-import { achievementService, GameCompletionData } from '../lib/achievementService';
-import { MobileControls } from './MobileControls';
-import { Share2, RefreshCw, LogOut, HelpCircle, X, Check, ChevronRight, Settings as SettingsIcon } from 'lucide-react';
 import { ShareGame } from './ShareGame';
 import { GameSettings } from './GameSettings';
+import { MobileControls } from './MobileControls';
+import { Share2, RefreshCw, LogOut, HelpCircle, X, Check, ChevronRight, Settings as SettingsIcon } from 'lucide-react';
 
 // Game constants
 const CANVAS_WIDTH = 800;
 const CANVAS_HEIGHT = 600;
 const PLAYER_SIZE = 20;
-const PROJECTILE_SIZE = 8;
-const SHOT_COOLDOWN = 3000;
-const MAX_SHOTS = 5;
-const SHOT_DAMAGE = 20;
-const AI_UPDATE_INTERVAL = 250;
-const AI_SIGHT_RANGE = 350;
-const AI_SHOT_CHANCE = 0.5;
-const AI_MOVEMENT_SPEED = 3.5;
 const AI_BOT_COUNT = 3;
-const PLAYER_MOVEMENT_SPEED = 5;
-const PROJECTILE_SPEED = 6;
-const HIT_EFFECT_DURATION = 300;
-const LOW_HEALTH_THRESHOLD = 30;
-
-interface GamePlayer {
-  id: string;
-  x: number;
-  y: number;
-  health: number;
-  username: string;
-  avatar_url?: string;
-  isAI?: boolean;
-  lastHitTime?: number | null;
-  invulnerable?: boolean;
-  lastMoveTime?: number;
-  velocity?: { x: number; y: number };
-  aiState?: {
-    targetX: number;
-    targetY: number;
-    lastShotTime: number;
-    movementDirection: { x: number; y: number };
-    changeDirCounter: number;
-    personality?: 'aggressive' | 'defensive' | 'sniper' | 'erratic';
-  };
-}
-
-interface GameSettings {
-  volume: number;
-  graphicsQuality: 'low' | 'medium' | 'high';
-  musicEnabled: boolean;
-  sfxEnabled: boolean;
-  controlType: 'arrows' | 'wasd';
-  showFps: boolean;
-  showTutorialOnStart: boolean;
-}
-
-interface PlayerAvatarCache {
-  [playerId: string]: HTMLImageElement | null;
-}
 
 export function Game() {
   const { id } = useParams<{ id: string }>();
@@ -73,29 +24,399 @@ export function Game() {
   // Game state
   const [gameState, setGameState] = useState<'loading' | 'waiting' | 'playing' | 'finished'>('loading');
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [isMobile, setIsMobile] = useState(false);
   const [isSingleplayer, setIsSingleplayer] = useState(false);
-  const [showShareLink, setShowShareLink] = useState(false);
   const [showShareDialog, setShowShareDialog] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [tutorialStep, setTutorialStep] = useState(0);
-  const [showSettings, setShowSettings] = useState(false);
   const [neverShowTutorial, setNeverShowTutorial] = useState(false);
-  const [playerAvatars, setPlayerAvatars] = useState<PlayerAvatarCache>({});
-  const [canShoot, setCanShoot] = useState(true);
-  const [shotCount, setShotCount] = useState(0);
+  const [showShareLink, setShowShareLink] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   
-  // Simple game data
-  const [gameSettings, setGameSettings] = useState<GameSettings>({
-    volume: 70,
-    graphicsQuality: 'medium',
-    musicEnabled: true,
-    sfxEnabled: true,
-    controlType: 'wasd',
-    showFps: false,
-    showTutorialOnStart: true
-  });
-  
+  // Initialize AI opponents
+  const initializeAIOpponents = useCallback((count: number) => {
+    console.log("Initializing AI opponents:", count);
+
+    // Remove any existing AI opponents
+    const playersToRemove = [];
+    for (const [playerId, player] of players.entries()) {
+      if (player.isAI) playersToRemove.push(playerId);
+    }
+    playersToRemove.forEach(id => removePlayer(id));
+
+    // Add new AI opponents
+    for (let i = 0; i < count; i++) {
+      const aiId = 'ai_' + Math.random().toString(36).substring(2, 9);
+      
+      // Position AI in different locations
+      const angle = (Math.PI * 2 * i) / count;
+      const distance = CANVAS_WIDTH * 0.3;
+      
+      const x = Math.max(PLAYER_SIZE, Math.min(CANVAS_WIDTH - PLAYER_SIZE,
+        CANVAS_WIDTH / 2 + Math.cos(angle) * distance));
+      const y = Math.max(PLAYER_SIZE, Math.min(CANVAS_HEIGHT - PLAYER_SIZE,
+        CANVAS_HEIGHT / 2 + Math.sin(angle) * distance));
+      
+      const botName = `Bot ${i+1}`;
+      
+      updatePlayer(aiId, {
+        id: aiId,
+        x,
+        y,
+        health: 100,
+        username: botName,
+        isAI: true
+      });
+      
+      console.log(`Added AI opponent: ${botName} at (${x.toFixed(0)}, ${y.toFixed(0)})`);
+    }
+  }, [players, removePlayer, updatePlayer]);
+
+  // Initialize game settings from localStorage
+  useEffect(() => {
+    // Check if we should show tutorial
+    const shouldNeverShow = localStorage.getItem('neverShowTutorial') === 'true';
+    setNeverShowTutorial(shouldNeverShow);
+    
+    if (!shouldNeverShow) {
+      setShowTutorial(true);
+    }
+  }, []);
+
+  // Check if device is mobile
+  useEffect(() => {
+    const checkMobile = () => {
+      const userAgent = navigator.userAgent || navigator.vendor;
+      const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
+      setIsMobile(isMobileDevice);
+    };
+
+    checkMobile();
+
+    // Set singleplayer mode if needed
+    if (id === 'singleplayer') {
+      setIsSingleplayer(true);
+    }
+  }, [id]);
+
+  // Initialize the game
+  useEffect(() => {
+    const initGame = async () => {
+      try {
+        console.log("Initializing game with id:", id);
+        
+        if (id === 'singleplayer') {
+          console.log("Initializing singleplayer mode");
+
+          // Generate a random player ID
+          const playerId = 'player_' + Math.random().toString(36).substring(2, 9);
+          setCurrentUserId(playerId);
+
+          // Add player in center of canvas
+          const x = CANVAS_WIDTH / 2;
+          const y = CANVAS_HEIGHT / 2;
+
+          updatePlayer(playerId, {
+            id: playerId,
+            x,
+            y,
+            health: 100,
+            username: 'You'
+          });
+
+          // Add AI opponents and start game
+          setTimeout(() => {
+            console.log("Starting singleplayer game");
+            initializeAIOpponents(AI_BOT_COUNT);
+            setGameState('playing');
+          }, 500);
+
+          return;
+        }
+
+        // Multiplayer: Check if already initialized
+        if (currentUserId && id !== 'singleplayer' && players.size > 0) {
+          console.log("Game already initialized, skipping");
+          return;
+        }
+
+        // Authenticate user for multiplayer
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          navigate('/');
+          return;
+        }
+
+        console.log("User authenticated:", user.id);
+        setCurrentUserId(user.id);
+
+        // Get profile
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('username')
+          .eq('id', user.id)
+          .single();
+
+        if (profile) {
+          const avatar_url = user.user_metadata?.avatar_url || null;
+          const existingPlayer = players.get(user.id);
+
+          // Random starting position or use existing
+          const x = existingPlayer ? existingPlayer.x : Math.random() * (CANVAS_WIDTH - PLAYER_SIZE * 2) + PLAYER_SIZE;
+          const y = existingPlayer ? existingPlayer.y : Math.random() * (CANVAS_HEIGHT - PLAYER_SIZE * 2) + PLAYER_SIZE;
+
+          // Update player data
+          updatePlayer(user.id, {
+            id: user.id,
+            x,
+            y,
+            health: existingPlayer ? existingPlayer.health : 100,
+            username: profile.username,
+            avatar_url
+          });
+
+          if (id && id !== 'singleplayer' && !existingPlayer) {
+            try {
+              // First check if player exists
+              const { data: existingRecord } = await supabase
+                .from('game_players')
+                .select('*')
+                .eq('game_id', id)
+                .eq('player_id', user.id)
+                .maybeSingle();
+
+              if (existingRecord) {
+                console.log("Player already in game, updating position");
+                await supabase
+                  .from('game_players')
+                  .update({
+                    position_x: x,
+                    position_y: y
+                  })
+                  .eq('game_id', id)
+                  .eq('player_id', user.id);
+              } else {
+                console.log("Adding player to game");
+                await supabase
+                  .from('game_players')
+                  .insert({
+                    game_id: id,
+                    player_id: user.id,
+                    position_x: x,
+                    position_y: y,
+                    health: 100
+                  });
+              }
+
+              // Get game info
+              const { data: game } = await supabase
+                .from('games')
+                .select('host_id, room_code')
+                .eq('id', id)
+                .single();
+
+              if (game) {
+                if (game.room_code) {
+                  console.log("Room code:", game.room_code);
+                  setRoomCode(game.room_code);
+                }
+
+                if (game.host_id === user.id) {
+                  setIsHost(true);
+                  setTimeout(() => setShowShareLink(true), 1000);
+                }
+              }
+            } catch (error) {
+              console.error("Error adding player to game:", error);
+            }
+          }
+        }
+
+        // Set initial game state
+        if (gameState === 'loading') {
+          console.log("Setting game state to waiting");
+          setGameState('waiting');
+          
+          // Force game to playing state after delay for testing
+          setTimeout(() => {
+            console.log("Forcing game to playing state");
+            setGameState('playing');
+          }, 2000);
+        }
+      } catch (error) {
+        console.error("Game initialization error:", error);
+      }
+    };
+
+    initGame();
+  }, [id, navigate, updatePlayer, players, currentUserId, gameState, setRoomCode, setIsHost, initializeAIOpponents]);
+
+  // Canvas rendering
+  useEffect(() => {
+    if (!canvasRef.current) {
+      console.error("Canvas ref is null");
+      return;
+    }
+    
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      console.error("Failed to get canvas context");
+      return;
+    }
+
+    console.log(`Setting up canvas render. Players: ${players.size}, Current user: ${currentUserId}`);
+
+    let animationFrameId: number;
+    
+    // Game rendering loop
+    const render = () => {
+      // Clear canvas
+      ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      
+      // Draw background
+      ctx.fillStyle = '#1a1a2e';
+      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      
+      // Draw grid
+      ctx.strokeStyle = '#2a2a4e';
+      ctx.lineWidth = 1;
+      
+      for (let x = 0; x <= CANVAS_WIDTH; x += 40) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, CANVAS_HEIGHT);
+        ctx.stroke();
+      }
+      
+      for (let y = 0; y <= CANVAS_HEIGHT; y += 40) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(CANVAS_WIDTH, y);
+        ctx.stroke();
+      }
+      
+      // Draw game state info for debugging
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = '12px Arial';
+      ctx.textAlign = 'left';
+      ctx.fillText(`Game State: ${gameState}`, 10, 20);
+      ctx.fillText(`Players: ${players.size}`, 10, 40);
+      ctx.fillText(`Current User: ${currentUserId?.substring(0, 8)}`, 10, 60);
+      
+      // Draw players
+      let drawnCount = 0;
+      players.forEach((player) => {
+        if (player.health <= 0) return;
+        
+        drawnCount++;
+        
+        // Draw player circle
+        ctx.fillStyle = player.id === currentUserId ? '#4CAF50' : (player.isAI ? '#F44336' : '#2196F3');
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Draw player name
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(player.username, player.x, player.y - 30);
+        
+        // Draw health bar
+        const healthBarWidth = 40;
+        const healthBarHeight = 4;
+        const healthBarX = player.x - healthBarWidth / 2;
+        const healthBarY = player.y - PLAYER_SIZE - 15;
+        
+        // Health bar background
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(healthBarX, healthBarY, healthBarWidth, healthBarHeight);
+        
+        // Health bar fill
+        ctx.fillStyle = '#4CAF50';
+        ctx.fillRect(healthBarX, healthBarY, healthBarWidth * (player.health / 100), healthBarHeight);
+      });
+      
+      console.log(`Drew ${drawnCount} players on canvas`);
+      
+      // Continue animation
+      animationFrameId = requestAnimationFrame(render);
+    };
+    
+    // Start render loop
+    console.log("Starting render loop");
+    animationFrameId = requestAnimationFrame(render);
+    
+    // Cleanup
+    return () => {
+      console.log("Cleaning up render loop");
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [players, currentUserId, gameState]);
+
+  // Resize handling
+  useEffect(() => {
+    const handleResize = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      
+      const isMobileDevice = window.innerWidth < 768 || window.innerHeight < 600;
+      if (isMobileDevice) {
+        const scale = Math.min(1, (window.innerWidth - 40) / CANVAS_WIDTH);
+        canvas.style.transform = `scale(${scale})`;
+      } else {
+        canvas.style.transform = 'scale(1)';
+      }
+    };
+    
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, []);
+
+  // Debug player positions
+  useEffect(() => {
+    console.log("Current players:", Array.from(players.entries()).map(([id, p]) => ({
+      id: id.substring(0, 8),
+      username: p.username,
+      x: p.x,
+      y: p.y,
+      health: p.health,
+      isAI: p.isAI
+    })));
+  }, [players]);
+
+  // Handle tutorial close
+  const handleCloseTutorial = () => {
+    setShowTutorial(false);
+    setTutorialStep(0);
+    
+    if (neverShowTutorial) {
+      localStorage.setItem('neverShowTutorial', 'true');
+    }
+  };
+
+  // Handle returning to lobby
+  const handleReturnToLobby = () => {
+    navigate('/game/lobby');
+  };
+
+  // Show loading screen
+  if (gameState === 'loading') {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="flex flex-col items-center">
+          <div className="h-12 w-12 border-4 border-t-indigo-500 border-gray-700 rounded-full animate-spin mb-4"></div>
+          <p className="text-white">Loading game...</p>
+        </div>
+      </div>
+    );
+  }
+
   // Tutorial steps
   const tutorialSteps = [
     {
@@ -123,421 +444,6 @@ export function Game() {
       content: "You're all set! Good luck and have fun in XShooter!"
     }
   ];
-// Initialize AI opponents with different personalities for more dynamic gameplay
-const initializeAIOpponents = useCallback((count: number) => {
-  console.log("Initializing AI opponents:", count);
-
-  // Remove any existing AI opponents first
-  const playersToRemove = [];
-  for (const [playerId, player] of players.entries()) {
-    if (player.isAI) playersToRemove.push(playerId);
-  }
-
-  // Remove in a separate loop to avoid modifying collection during iteration
-  playersToRemove.forEach(id => removePlayer(id));
-
-  // AI personality types for variety
-  const personalities = ['aggressive', 'defensive', 'sniper', 'erratic'];
-
-  // Add new AI opponents
-  for (let i = 0; i < count; i++) {
-    const aiId = 'ai_' + Math.random().toString(36).substring(2, 9);
-
-    // Distribute AI opponents evenly around the canvas
-    const angle = (Math.PI * 2 * i) / count;
-    const distance = CANVAS_WIDTH * 0.3; // Position at 30% of canvas width from center
-
-    const x = Math.max(PLAYER_SIZE, Math.min(CANVAS_WIDTH - PLAYER_SIZE,
-      CANVAS_WIDTH / 2 + Math.cos(angle) * distance));
-    const y = Math.max(PLAYER_SIZE, Math.min(CANVAS_HEIGHT - PLAYER_SIZE,
-      CANVAS_HEIGHT / 2 + Math.sin(angle) * distance));
-
-    // Initial movement direction is toward the center
-    const dirX = (CANVAS_WIDTH / 2) - x;
-    const dirY = (CANVAS_HEIGHT / 2) - y;
-    const dirLength = Math.sqrt(dirX * dirX + dirY * dirY);
-
-    const movementDirection = {
-      x: dirLength > 0 ? dirX / dirLength : 0,
-      y: dirLength > 0 ? dirY / dirLength : 0,
-    };
-
-    // Assign personality
-    const personality = personalities[i % personalities.length];
-
-    // Create with unique names based on personality
-    const botNames = {
-      'aggressive': ["PredatorBot", "HunterBot", "RusherBot"],
-      'defensive': ["GuardianBot", "ShieldBot", "DefenderBot"],
-      'sniper': ["SniperBot", "SharpshooterBot", "MarksmanBot"],
-      'erratic': ["ZigZagBot", "ChaosBot", "TricksterBot"]
-    };
-
-    const nameList = botNames[personality];
-    const botName = nameList[Math.floor(Math.random() * nameList.length)];
-
-    updatePlayer(aiId, {
-      id: aiId,
-      x,
-      y,
-      health: 100,
-      username: botName,
-      isAI: true,
-      aiState: {
-        targetX: x,
-        targetY: y,
-        lastShotTime: 0,
-        movementDirection,
-        changeDirCounter: 0,
-        personality
-      },
-    });
-
-    console.log(`Added AI opponent: ${botName} (${personality}) at (${x.toFixed(0)}, ${y.toFixed(0)})`);
-  }
-}, [players, removePlayer, updatePlayer]);
-
-  // Initialize game settings from localStorage
-  useEffect(() => {
-    try {
-      const savedSettings = localStorage.getItem('gameSettings');
-      if (savedSettings) {
-        const parsedSettings = JSON.parse(savedSettings);
-        setGameSettings(prev => ({
-          ...prev,
-          ...parsedSettings
-        }));
-
-        // Check if we should show tutorial
-        const shouldNeverShow = localStorage.getItem('neverShowTutorial') === 'true';
-        setNeverShowTutorial(shouldNeverShow);
-
-        // Only show tutorial if setting is enabled and user hasn't opted out
-        if (parsedSettings.showTutorialOnStart && !shouldNeverShow) {
-          setShowTutorial(true);
-        }
-      } else if (gameSettings.showTutorialOnStart) {
-        // If no saved settings but default is to show tutorial
-        // and user hasn't opted out
-        const shouldNeverShow = localStorage.getItem('neverShowTutorial') === 'true';
-        setNeverShowTutorial(shouldNeverShow);
-        if (!shouldNeverShow) {
-          setShowTutorial(true);
-        }
-      }
-    } catch (err) {
-      console.error('Error loading settings:', err);
-    }
-  }, []);
-
-  // Check if device is mobile
-  useEffect(() => {
-    const checkMobile = () => {
-      const userAgent = navigator.userAgent || navigator.vendor;
-      const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
-      setIsMobile(isMobileDevice);
-    };
-
-    checkMobile();
-
-    // Set singleplayer mode if needed
-    if (id === 'singleplayer') {
-      setIsSingleplayer(true);
-    }
-  }, [id]);
-
-  // Initialize the game and authentication
-  useEffect(() => {
-    const initGame = async () => {
-      try {
-// For singleplayer mode
-if (id === 'singleplayer') {
-  console.log("Initializing singleplayer mode");
-
-  // Generate a player ID for this session
-  const playerId = 'player_' + Math.random().toString(36).substring(2, 9);
-  setCurrentUserId(playerId);
-
-  // Position player in the center of the canvas
-  const x = CANVAS_WIDTH / 2;
-  const y = CANVAS_HEIGHT / 2;
-
-  // Add the player
-  updatePlayer(playerId, {
-    id: playerId,
-    x,
-    y,
-    health: 100,
-    username: 'You'
-  });
-
-  // Set game state to playing and initialize AI opponents
-  setTimeout(() => {
-    console.log("Starting singleplayer game");
-    initializeAIOpponents(AI_BOT_COUNT); // Add this line
-    setGameState('playing');
-  }, 300);
-
-  return;
-}
-
-
-        // For multiplayer games
-        if (currentUserId && id !== 'singleplayer' && players.size > 0) {
-          console.log("Game already initialized");
-          return;
-        }
-
-        // Authenticate user for multiplayer
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-          navigate('/');
-          return;
-        }
-
-        console.log("User authenticated:", user.id);
-        setCurrentUserId(user.id);
-
-        // Get user profile
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('username')
-          .eq('id', user.id)
-          .single();
-
-        if (profile) {
-          const avatar_url = user.user_metadata?.avatar_url || null;
-          const existingPlayer = players.get(user.id);
-
-          // Random starting position or use existing
-          const x = existingPlayer ? existingPlayer.x : Math.random() * (CANVAS_WIDTH - PLAYER_SIZE * 2) + PLAYER_SIZE;
-          const y = existingPlayer ? existingPlayer.y : Math.random() * (CANVAS_HEIGHT - PLAYER_SIZE * 2) + PLAYER_SIZE;
-
-          // Update player data
-          updatePlayer(user.id, {
-            x,
-            y,
-            health: existingPlayer ? existingPlayer.health : 100,
-            username: profile.username,
-            avatar_url
-          });
-
-          // For multiplayer games, add to database
-          if (id && id !== 'singleplayer' && !existingPlayer) {
-            // Add player to game in database
-            await supabase
-              .from('game_players')
-              .upsert({
-                game_id: id,
-                player_id: user.id,
-                position_x: x,
-                position_y: y
-              }, { onConflict: 'game_id,player_id' });
-
-            // Get game info
-            const { data: game } = await supabase
-              .from('games')
-              .select('host_id, room_code')
-              .eq('id', id)
-              .single();
-
-            if (game) {
-              // Store room code
-              if (game.room_code) {
-                console.log("Room code:", game.room_code);
-                setRoomCode(game.room_code);
-              }
-
-              // Check if host
-              if (game.host_id === user.id) {
-                setIsHost(true);
-                // Show share link for host
-                setTimeout(() => setShowShareLink(true), 1000);
-              }
-            }
-          }
-        }
-
-        // Set initial game state
-        if (gameState === 'loading') {
-          console.log("Setting game state to waiting");
-          setGameState('waiting');
-        }
-
-      } catch (error) {
-        console.error("Game initialization error:", error);
-      }
-    };
-
-    initGame();
-  }, [id, navigate, updatePlayer, players, currentUserId, gameState, setRoomCode, setIsHost]);
-
-  // Handle keyboard input for movement
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Implement basic movement controls
-      // This is a simplified version that would be expanded in the full component
-    };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      // Handle key release
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-    };
-  }, [gameSettings.controlType, showTutorial]);
-
-  // Basic canvas rendering
-useEffect(() => {
-  const canvas = canvasRef.current;
-  if (!canvas) return;
-  
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-
-  console.log("Setting up canvas rendering with players:", Array.from(players.entries()).length);
-
-  // Basic game loop that will be expanded in the full component
-  const draw = () => {
-    // Clear canvas
-    ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-    
-    // Draw background
-    ctx.fillStyle = '#1a1a2e';
-    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-    
-    // Grid lines for better visual reference
-    ctx.strokeStyle = '#2a2a4e';
-    ctx.lineWidth = 1;
-    
-    // Draw grid lines
-    for (let x = 0; x <= CANVAS_WIDTH; x += 40) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, CANVAS_HEIGHT);
-      ctx.stroke();
-    }
-    
-    for (let y = 0; y <= CANVAS_HEIGHT; y += 40) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(CANVAS_WIDTH, y);
-      ctx.stroke();
-    }
-    
-    // Draw players (simplified)
-    let drawnPlayerCount = 0;
-    players.forEach(player => {
-      if (player.health <= 0) return;
-      
-      // Draw player
-      ctx.fillStyle = player.id === currentUserId ? '#4CAF50' : (player.isAI ? '#F44336' : '#2196F3');
-      ctx.beginPath();
-      ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
-      ctx.fill();
-      
-      // Draw health bar
-      const healthBarWidth = 40;
-      const healthBarHeight = 4;
-      const healthBarX = player.x - healthBarWidth / 2;
-      const healthBarY = player.y - PLAYER_SIZE - 15;
-      
-      // Background
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-      ctx.fillRect(healthBarX, healthBarY, healthBarWidth, healthBarHeight);
-      
-      // Health fill
-      ctx.fillStyle = '#4CAF50';
-      ctx.fillRect(healthBarX, healthBarY, healthBarWidth * (player.health / 100), healthBarHeight);
-      
-      // Username
-      ctx.fillStyle = '#FFFFFF';
-      ctx.font = '12px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText(player.username, player.x, player.y - PLAYER_SIZE - 5);
-      
-      drawnPlayerCount++;
-    });
-    
-    console.log(`Drew ${drawnPlayerCount} players on canvas`);
-    
-    // Continue animation
-    requestAnimationFrame(draw);
-  };
-  
-  // Start game loop
-  console.log("Starting game rendering loop");
-  const animationId = requestAnimationFrame(draw);
-  
-  // Cleanup
-  return () => cancelAnimationFrame(animationId);
-}, [players, currentUserId]);
-
-  // Resize handling
-  useEffect(() => {
-    const handleResize = () => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      
-      // Scale canvas for different screen sizes
-      const isMobileDevice = window.innerWidth < 768 || window.innerHeight < 600;
-      if (isMobileDevice) {
-        const scale = Math.min(1, (window.innerWidth - 40) / CANVAS_WIDTH);
-        canvas.style.transform = `scale(${scale})`;
-      } else {
-        canvas.style.transform = 'scale(1)';
-      }
-    };
-    
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    
-    return () => {
-      window.removeEventListener('resize', handleResize);
-    };
-  }, []);
-
-  // Simple handler for returning to lobby
-  const handleReturnToLobby = () => {
-    navigate('/game/lobby');
-  };
-
-  // Handle tutorial close
-  const handleCloseTutorial = () => {
-    setShowTutorial(false);
-    setTutorialStep(0);
-    
-    // Save preferences
-    if (neverShowTutorial) {
-      localStorage.setItem('neverShowTutorial', 'true');
-    }
-    
-    // Update settings
-    const updatedSettings = {
-      ...gameSettings,
-      showTutorialOnStart: !neverShowTutorial
-    };
-    
-    setGameSettings(updatedSettings);
-    localStorage.setItem('gameSettings', JSON.stringify(updatedSettings));
-  };
-
-  // Show loading screen
-  if (gameState === 'loading') {
-    return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-        <div className="flex flex-col items-center">
-          <div className="h-12 w-12 border-4 border-t-indigo-500 border-gray-700 rounded-full animate-spin mb-4"></div>
-          <p className="text-white">Loading game...</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col items-center min-h-screen bg-gray-900 p-4" tabIndex={0}>
@@ -582,6 +488,11 @@ useEffect(() => {
           height={CANVAS_HEIGHT}
           className="bg-gray-800 rounded-lg shadow-2xl border border-gray-700"
         />
+        
+        {/* Debug overlay */}
+        <div className="absolute top-2 right-2 bg-black bg-opacity-50 text-white text-xs p-2 rounded">
+          Game: {id?.substring(0, 8)} | State: {gameState} | Players: {players.size}
+        </div>
 
         {/* Mobile Controls */}
         {isMobile && !showTutorial && <MobileControls onMove={() => {}} onShoot={() => {}} />}
@@ -660,6 +571,19 @@ useEffect(() => {
           <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
             <div className="max-w-md w-full">
               <GameSettings onClose={() => setShowSettings(false)} />
+            </div>
+          </div>
+        )}
+        
+        {/* Share Dialog */}
+        {showShareDialog && (
+          <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
+            <div className="max-w-md w-full">
+              <ShareGame 
+                roomCode={id || ''} 
+                gameLink={`${window.location.origin}/game/${id}`}
+                onClose={() => setShowShareDialog(false)}
+              />
             </div>
           </div>
         )}
